@@ -286,11 +286,13 @@ def validate_rules_yaml(content):
 
 # ================================================================ server
 class Dashboard:
-    def __init__(self, cfg, store):
+    def __init__(self, cfg, store, ai=None):
+        from .ai import AIManager
         d = cfg["dashboard"]
+        self.ai = ai or AIManager(cfg, store)
         self.cfg = cfg
         self.host, self.port = d.get("host", "127.0.0.1"), int(d.get("port", 8787))
-        self.password = d.get("password") or ""
+        self.password = str(d.get("password") or "")
         if self.host not in ("127.0.0.1", "localhost", "::1") and not self.password:
             raise ValueError("dashboard.password wajib diisi jika dashboard dibuka ke jaringan "
                              f"(host {self.host}).")
@@ -397,6 +399,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.app.store.events_after(after, int((q.get("limit") or ["200"])[0])))
             if u.path == "/api/standards":
                 return self._send(200, self.app.files.list())
+            if u.path == "/api/ai":
+                return self._send(200, {**self.app.ai.describe(), "stats": self.app.store.ai_stats(7)})
             if u.path == "/api/stream":
                 return self._stream(int((q.get("after") or ["0"])[0]))
         except Exception as ex:
@@ -436,6 +440,20 @@ class _Handler(BaseHTTPRequestHandler):
                 if code == 200:
                     self.app.store.add_event("standards", f"Standar {name} diperbarui", "lewat dashboard")
                 return self._send(code, res)
+            if method == "PUT" and u.path == "/api/ai":
+                self.app.ai.save_overrides(body)
+                self.app.store.add_event("ai", "Pengaturan AI diperbarui", "lewat dashboard")
+                return self._send(200, {**self.app.ai.describe(), "stats": self.app.store.ai_stats(7)})
+            if method == "POST" and u.path == "/api/ai/test":
+                res = self.app.ai.test(body.get("name"))
+                self.app.store.add_event("ai", f"Tes AI {body.get('name')}: {'berhasil' if res['ok'] else 'gagal'}",
+                                         res.get("error") or f"{res.get('ms')} ms", level="success" if res["ok"] else "error")
+                return self._send(200, res)
+            if method == "POST" and u.path == "/api/ai/models":
+                try:
+                    return self._send(200, {"models": self.app.ai.list_models(body.get("name"))})
+                except Exception as ex:
+                    return self._send(200, {"models": [], "error": str(ex)[:300]})
             if method == "POST" and u.path == "/api/standards/test":
                 return self._send(200, self.app.files.test(body.get("path"), body.get("code")))
         except Exception as ex:

@@ -1,6 +1,14 @@
+# data & rahasia (dibuat oleh setup)
+data/
 .env
 config.yaml
+ai_overrides.json
 *.db
+*.db-*
 logs/
+# lokal
 .venv/
 __pycache__/
+.pytest_cache/
+*.zip
+*.bak

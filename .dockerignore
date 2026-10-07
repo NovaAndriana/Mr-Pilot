@@ -1,0 +1,15 @@
+.git
+.github
+.gitlab-ci.yml
+.venv
+data
+logs
+*.db
+*.db-*
+.env
+config.yaml
+ai_overrides.json
+**/__pycache__
+.pytest_cache
+tests
+*.zip

@@ -7,7 +7,6 @@ import time
 from datetime import datetime
 from fnmatch import fnmatch
 
-import requests
 
 log = logging.getLogger("mr_pilot.review")
 
@@ -113,28 +112,6 @@ Jawab HANYA dengan JSON valid (tanpa teks lain) dengan skema:
   "good_points": ["maks 4 hal yang memang bagus dari implementasinya (test, security fix, struktur kode). Kosongkan jika tidak ada, jangan dibuat-buat"],
   "breaking_changes": ["..."],
   "findings": [{{"severity": "blocker|major|minor", "file": "path:line", "title": "judul singkat", "detail": "penjelasan + saran"}}]}}"""
-
-
-def call_llm(llm, system, user):
-    provider = llm.get("provider", "anthropic")
-    if provider == "anthropic":
-        url = (llm.get("base_url") or "https://api.anthropic.com").rstrip("/") + "/v1/messages"
-        r = requests.post(url, timeout=300, headers={
-            "x-api-key": llm["api_key"], "anthropic-version": "2023-06-01",
-            "content-type": "application/json"},
-            json={"model": llm["model"], "max_tokens": 4000, "system": system,
-                  "messages": [{"role": "user", "content": user}]})
-        r.raise_for_status()
-        return "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
-    if provider == "openai":
-        url = (llm.get("base_url") or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
-        r = requests.post(url, timeout=300, headers={"Authorization": f"Bearer {llm['api_key']}"},
-                          json={"model": llm["model"], "temperature": 0.1,
-                                "messages": [{"role": "system", "content": system},
-                                             {"role": "user", "content": user}]})
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
-    raise ValueError(f"provider tidak dikenal: {provider}")
 
 
 # --------------------------------------------------------- bot comment parse
@@ -286,13 +263,14 @@ def _parse_dt(s):
 
 # ----------------------------------------------------------------- Reviewer
 class Reviewer:
-    def __init__(self, cfg, gl):
+    def __init__(self, cfg, gl, ai=None):
+        from .ai import AIManager
         self.cfg = cfg["review"]
         self.gl = gl
+        self.ai = ai or AIManager(cfg)
 
     def llm_available(self):
-        llm = self.cfg["llm"]
-        return bool(llm.get("api_key") and llm.get("model"))
+        return bool(self.ai.available("review"))
 
     def review(self, mr, first_seen, force_llm=False):
         """Return review dict, or None when still waiting for the bot comment."""
@@ -310,7 +288,7 @@ class Reviewer:
         if (force_llm or mode == "llm") and self.llm_available():
             return self.from_llm(mr)
         if mode == "llm":
-            return empty_review("none", "review.llm.api_key belum diisi.")
+            return empty_review("none", "Belum ada provider AI yang siap. Atur di dashboard > AI atau jalankan setup.")
 
         bot = self.from_bot(mr)
         if bot:
@@ -360,8 +338,10 @@ class Reviewer:
                     f"Deskripsi:\n{(mr.get('description') or '-')[:6000]}\n\n"
                     f"File dilewati: {', '.join(skipped) or '-'}\n"
                     f"Diff {'(TERPOTONG) ' if truncated else ''}:\n{diff_text}")
-            raw = call_llm(llm, system, user)
-            return normalize(extract_json(raw), "llm")
+            raw, provider = self.ai.complete(system, user, "review")
+            rv = normalize(extract_json(raw), "llm")
+            rv["provider"] = provider
+            return rv
         except Exception as e:
             log.exception("LLM review gagal")
             return empty_review("llm", f"Review AI gagal: {e}")

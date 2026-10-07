@@ -1,0 +1,37 @@
+# MR Pilot. Nilai ${...} dibaca dari file .env di folder ini (dibuat oleh setup.sh / setup.ps1).
+# Data (config, .env berisi token, database, log, standar) ada di ./data dan tidak masuk image.
+services:
+  mr-pilot:
+    image: ${MRP_IMAGE:-mr-pilot:local}
+    build:
+      context: .
+      args:
+        INSTALL_CLAUDE_CODE: ${INSTALL_CLAUDE_CODE:-false}
+    restart: unless-stopped
+    user: "${MRP_UID:-1000}:${MRP_GID:-1000}"
+    environment:
+      HOME: /data/home
+      TZ: ${TZ:-Asia/Jakarta}
+      MRP_OLLAMA_BUNDLED: ${MRP_OLLAMA_BUNDLED:-0}
+    volumes:
+      - ./data:/data
+    ports:
+      - "${MRP_BIND:-127.0.0.1}:${MRP_PORT:-8787}:8787"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # akses Ollama/LM Studio yang jalan di host
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # AI lokal di dalam Docker (opsional). Aktif jika .env berisi COMPOSE_PROFILES=local-ai
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["local-ai"]
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    # GPU NVIDIA: hapus tanda # di bawah (butuh nvidia-container-toolkit)
+    # deploy: { resources: { reservations: { devices: [{ driver: nvidia, count: all, capabilities: [gpu] }] } } }
+
+volumes:
+  ollama:

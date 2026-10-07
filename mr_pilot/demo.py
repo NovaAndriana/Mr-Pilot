@@ -92,6 +92,15 @@ def seed(store, now=None):
     for i in range(170):
         store.kv_set(f"cq_commit:42:clean{i}", f"0|{now - rnd.uniform(0, 30) * 86400:.0f}")
 
+    for i in range(140):
+        prov = rnd.choice(["claude_code"] * 5 + ["gemini"] * 3 + ["groq"] * 2)
+        ok = rnd.random() > (0.04 if prov != "groq" else 0.15)
+        ms = int(rnd.gauss({"claude_code": 21000, "gemini": 9000, "groq": 2500}[prov], 2000))
+        store.db.execute("INSERT INTO ai_calls(ts,provider,task,ok,ms,error) VALUES(?,?,?,?,?,?)",
+                         (now - rnd.uniform(0, 7 * 86400), prov, rnd.choice(["review", "standards"]), int(ok), max(300, ms),
+                          "" if ok else rnd.choice(["HTTP 429: rate limit", "timeout"])))
+    store.db.commit()
+
     evs = [("system", "MR Pilot aktif", "Memantau MR untuk @nova.andriana", "info", 300),
            ("mr_new", "MR baru !386: refactor(IDAS-5360): pisahkan usecase quota estimator", "oleh Dewi Lestari → staging", "info", 36),
            ("quality", "Standar kode !386: 0 error, 0 warning, 0 info", "0 warning diposting ke GitLab", "success", 34),

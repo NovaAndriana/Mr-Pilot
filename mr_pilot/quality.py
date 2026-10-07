@@ -3,7 +3,8 @@ import hashlib
 import logging
 import time
 
-from .reviewer import call_llm, extract_json
+from .ai import AIManager
+from .reviewer import extract_json
 from .standards import (SEV_RANK, Standards, annotate_diff, count_by_severity, sort_violations,
                         violation)
 
@@ -33,8 +34,9 @@ def _fp(*parts):
 
 
 class CodeQuality:
-    def __init__(self, cfg, gl, store, base_dir="."):
+    def __init__(self, cfg, gl, store, base_dir=".", ai=None):
         self.root = cfg
+        self.ai = ai or AIManager(cfg, store)
         self.cfg = cfg.get("code_quality") or {}
         self.enabled = bool(self.cfg.get("enabled"))
         self.gl = gl
@@ -120,8 +122,7 @@ class CodeQuality:
 
     # -------------------------------------------------------------- helpers
     def _llm_ok(self):
-        llm = self.root["review"]["llm"]
-        return bool(llm.get("api_key") and llm.get("model"))
+        return bool(self.ai.available("standards"))
 
     def _footer(self):
         f = self.report.get("comment_footer", "")
@@ -185,7 +186,8 @@ class CodeQuality:
                                   language=llm.get("language", "Indonesia"),
                                   standards=self.std.documents(stacks)[:30000])
         try:
-            data = extract_json(call_llm(llm, system, f"Judul MR: {mr.get('title')}\n" + "".join(chunks)))
+            raw, _ = self.ai.complete(system, f"Judul MR: {mr.get('title')}\n" + "".join(chunks), "standards")
+            data = extract_json(raw)
         except Exception as ex:
             log.exception("AI standards check gagal")
             return [], f"Cek AI gagal: {ex}"

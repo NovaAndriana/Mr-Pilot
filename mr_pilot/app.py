@@ -3,6 +3,7 @@ import logging
 import time
 from datetime import datetime
 
+from .ai import AIManager
 from .formatting import VERDICT_LABEL, build_messages, e, review_buttons
 from .gitlab_api import GitLab
 from .quality import CodeQuality
@@ -44,9 +45,10 @@ class App:
         # dry-run uses a throwaway DB so a test run doesn't mark MRs as "already notified"
         self.store = store or Store(":memory:" if dry_run else cfg["storage"]["db_path"])
         self.allowed = set(t["allowed_user_ids"])
-        self.reviewer = Reviewer(cfg, self.gl)
+        self.ai = AIManager(cfg, self.store)
+        self.reviewer = Reviewer(cfg, self.gl, self.ai)
         self.teams = Teams(cfg)
-        self.quality = CodeQuality(cfg, self.gl, self.store, cfg.get("_base_dir", "."))
+        self.quality = CodeQuality(cfg, self.gl, self.store, cfg.get("_base_dir", "."), self.ai)
         self.username = g.get("username") or None
         self.last_poll = 0.0
 

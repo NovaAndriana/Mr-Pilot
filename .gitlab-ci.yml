@@ -1,0 +1,62 @@
+# CI/CD MR Pilot: test -> build image (GitLab Container Registry) -> deploy ke server via SSH.
+# Variables diisi otomatis oleh `setup.bat ci` / `./setup.sh ci`:
+#   DEPLOY_HOST, DEPLOY_USER, DEPLOY_PORT, DEPLOY_PATH, DEPLOY_SSH_KEY (file), DEPLOY_KNOWN_HOSTS (file)
+# Runner butuh executor docker dengan privileged (untuk docker:dind). Jika tidak bisa, ganti job build ke Kaniko.
+
+stages: [test, build, deploy]
+
+variables:
+  IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+
+test:
+  stage: test
+  image: python:3.12-slim
+  cache:
+    key: pip
+    paths: [.cache/pip]
+  variables:
+    PIP_CACHE_DIR: $CI_PROJECT_DIR/.cache/pip
+  script:
+    - pip install -r requirements.txt pytest pyflakes
+    - python -m pyflakes mr_pilot tests
+    - python -m pytest -q
+    - python -c "import sys; from mr_pilot.dashboard import validate_rules_yaml as v; e=v(open('standards/rules.yaml').read()); print(e or 'rules.yaml OK'); sys.exit(bool(e))"
+
+build:
+  stage: build
+  image: docker:27
+  services: [docker:27-dind]
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker pull "$CI_REGISTRY_IMAGE:latest" || true
+    - docker build --cache-from "$CI_REGISTRY_IMAGE:latest" --build-arg INSTALL_CLAUDE_CODE=true -t "$IMAGE" -t "$CI_REGISTRY_IMAGE:latest" .
+    - docker push "$IMAGE"
+    - docker push "$CI_REGISTRY_IMAGE:latest"
+
+deploy:
+  stage: deploy
+  image: alpine:3.20
+  environment: production
+  resource_group: production
+  rules:
+    - if: $DEPLOY_HOST == null || $DEPLOY_HOST == ""
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+  before_script:
+    - apk add --no-cache openssh-client
+    - install -m 700 -d ~/.ssh
+    - cp "$DEPLOY_SSH_KEY" ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+    - cp "$DEPLOY_KNOWN_HOSTS" ~/.ssh/known_hosts
+  script:
+    - export P=${DEPLOY_PORT:-22}
+    - scp -i ~/.ssh/deploy -P "$P" docker-compose.yml deploy/remote-deploy.sh "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+    - >
+      ssh -i ~/.ssh/deploy -p "$P" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST"
+      "cd '$DEPLOY_PATH' && chmod +x remote-deploy.sh &&
+      IMAGE='$IMAGE' REGISTRY='$CI_REGISTRY' REGISTRY_USER='$CI_REGISTRY_USER' REGISTRY_PASSWORD='$CI_REGISTRY_PASSWORD' ./remote-deploy.sh"

@@ -1,0 +1,108 @@
+# CI/CD MR Pilot: test -> build image (GHCR) -> deploy ke server via SSH.
+# Secrets diisi otomatis oleh `setup.bat ci` / `./setup.sh ci`:
+#   DEPLOY_HOST, DEPLOY_USER, DEPLOY_PORT, DEPLOY_PATH, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS
+name: MR Pilot CI/CD
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: mr-pilot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt pytest pyflakes
+      - run: python -m pyflakes mr_pilot tests
+      - run: python -m pytest -q
+      - name: Validasi aturan standar
+        run: python -c "import sys,yaml; from mr_pilot.dashboard import validate_rules_yaml as v; e=v(open('standards/rules.yaml').read()); print(e or 'rules.yaml OK'); sys.exit(bool(e))"
+
+  build:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.img.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: img
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ steps.img.outputs.image }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+            type=ref,event=tag
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: INSTALL_CLAUDE_CODE=true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cek secrets deploy
+        id: chk
+        run: |
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::notice::DEPLOY_HOST belum diset. Jalankan 'setup.bat ci' / './setup.sh ci' untuk mengaktifkan deploy otomatis."
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Siapkan SSH
+        if: steps.chk.outputs.skip != '1'
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KH: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$KH" > ~/.ssh/known_hosts
+      - name: Deploy
+        if: steps.chk.outputs.skip != '1'
+        env:
+          U: ${{ secrets.DEPLOY_USER }}
+          P: ${{ secrets.DEPLOY_PORT }}
+          D: ${{ secrets.DEPLOY_PATH }}
+          BASE_IMAGE: ${{ needs.build.outputs.image }}
+          GH_USER: ${{ github.actor }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IMAGE="$BASE_IMAGE:sha-${GITHUB_SHA::7}"
+          scp -i ~/.ssh/deploy -P "${P:-22}" docker-compose.yml deploy/remote-deploy.sh "$U@$DEPLOY_HOST:$D/"
+          ssh -i ~/.ssh/deploy -p "${P:-22}" -o IdentitiesOnly=yes "$U@$DEPLOY_HOST" \
+            "cd '$D' && chmod +x remote-deploy.sh && IMAGE='$IMAGE' REGISTRY=ghcr.io REGISTRY_USER='$GH_USER' REGISTRY_PASSWORD='$GH_TOKEN' ./remote-deploy.sh"

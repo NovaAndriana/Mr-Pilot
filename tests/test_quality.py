@@ -163,16 +163,27 @@ def test_status_fail_on_error():
     assert gl.statuses[0][1] == "failed"
 
 
-def test_ai_violations_filtered_and_posted(monkeypatch):
-    import mr_pilot.quality as q
+class FakeAI:
+    def __init__(self, reply):
+        self.reply, self.calls = reply, []
+
+    def available(self, task=None):
+        return ["fake"]
+
+    def complete(self, system, user, task="review"):
+        self.calls.append(task)
+        return self.reply, "fake"
+
+
+def test_ai_violations_filtered_and_posted():
     cfg = std_cfg()
-    cfg["review"]["llm"]["api_key"] = "k"
-    monkeypatch.setattr(q, "call_llm", lambda llm, s, u: json.dumps({"violations": [
+    ai = FakeAI(json.dumps({"violations": [
         {"rule": "Handler akses repo langsung", "severity": "warning", "file": "internal/a/b.go", "line": 11,
          "message": "Pindahkan ke usecase", "confidence": "high"},
         {"rule": "ragu", "severity": "error", "file": "internal/a/b.go", "line": 12, "message": "x", "confidence": "low"}]}))
     gl = QGL()
-    s = CodeQuality(cfg, gl, Store(":memory:")).run(mr())
+    s = CodeQuality(cfg, gl, Store(":memory:"), ai=ai).run(mr())
+    assert ai.calls == ["standards"]
     ai = [v for v in s["top"] if v["source"] == "ai"]
     assert len(ai) == 1 and ai[0]["rule"] == "Handler akses repo langsung"
     assert len(gl.discussions) == 1

@@ -16,63 +16,94 @@ MR baru (Anda reviewer) ─► review otomatis ─► kartu di Telegram ─► t
 - **Tolak**: Anda membalas dengan komentar, lalu diposting ke MR atas nama Anda.
 - **Pesan Teams** memakai template kalimat Anda sendiri (dipilih acak), dikirim lewat akun Anda. Tidak ada tanda bot/AI.
 - **Code Quality**: standar kode tim (Go, React, React Native, umum) ditulis sendiri. Pelanggaran diberi **warning langsung di commit-nya** (file + baris), diringkas di MR, dan muncul di Telegram serta dashboard.
-- **Dashboard realtime**: antrian MR, aktivitas langsung, tren pelanggaran standar, dan editor standar. Buka `http://127.0.0.1:8787`.
+- **Dashboard realtime**: antrian MR, aktivitas langsung, tren pelanggaran standar, editor standar, dan pengaturan AI.
+- **AI multi-provider**: Claude Code (langganan), Anthropic, Gemini, OpenRouter, Groq, OpenAI, dan lokal (Ollama/LM Studio). Ada urutan fallback otomatis dan provider per tugas, semuanya diatur dari dashboard.
+- **Jalan di Docker**, satu perintah `setup` untuk PC lokal maupun server, plus **CI/CD** GitHub Actions / GitLab CI yang dikonfigurasi otomatis.
 - Perintah Telegram: `/status`, `/cek`, `/help`.
 
 ---
 
-## 1. Persiapan (sekali saja)
+## 1. Mulai cepat
 
-### a. Token GitLab
-GitLab → avatar → **Preferences → Access Tokens** → buat token dengan scope **`api`**, beri tanggal kedaluwarsa. Simpan sebagai `GITLAB_TOKEN`.
+Satu perintah memasang Docker (jika belum ada), build, menjalankan wizard konfigurasi, lalu menyalakan MR Pilot.
 
-### b. Bot Telegram
-1. Di Telegram chat **@BotFather** → `/newbot` → simpan token sebagai `TELEGRAM_BOT_TOKEN`.
-2. Kirim pesan apa saja ke bot baru Anda.
-3. Setelah instalasi (langkah 2), jalankan `run.bat --get-chat-id` lalu salin angkanya ke `TELEGRAM_CHAT_ID`.
+| Di mana | Perintah |
+|---|---|
+| **PC Windows** | double-click **`setup.bat`** (atau `setup.bat -Server` agar dashboard bisa dibuka dari HP/laptop lain) |
+| **Server Linux** (Ubuntu/Debian/dll.) | `./setup.sh --server` |
+| macOS / WSL | `./setup.sh` |
 
-### c. Flow Teams (supaya pesan tampil atas nama Anda)
+Wizard menanyakan dan **langsung menguji**:
+1. **GitLab**: URL + Personal Access Token (scope `api`). Self-signed SSL terdeteksi otomatis.
+2. **Telegram**: token bot dari @BotFather. Chat id **terdeteksi otomatis** setelah Anda mengirim pesan ke bot.
+3. **AI**: isi satu atau lebih provider (lihat bagian 2). Setiap provider dites.
+4. **Teams**: URL flow Power Automate (opsional, lihat 1c).
+5. **Code quality** aktif/tidak, dan **password dashboard** dibuat otomatis.
+
+Semua tersimpan di folder **`data/`**: `config.yaml`, `.env` (token), database, log, standar, dan pengaturan AI. Folder ini tidak masuk image maupun git.
+
+### Perintah sehari-hari
+```
+setup.bat logs        ./setup.sh logs        lihat log
+setup.bat status      ./setup.sh status      status container
+setup.bat doctor      ./setup.sh doctor      cek koneksi GitLab, Telegram, AI, Teams
+setup.bat config      ./setup.sh config      jalankan ulang wizard
+setup.bat update      ./setup.sh update      git pull + build + restart
+setup.bat stop|start  ./setup.sh stop|start
+setup.bat demo        ./setup.sh demo        dashboard dengan data contoh (password: demo)
+setup.bat ci          ./setup.sh ci          pasang CI/CD + deploy otomatis (bagian 5)
+```
+Opsi install: `--with-claude-code` (CLI Claude Code ikut dipasang di image), `--with-ollama[=model]` (AI lokal di Docker), `--port 8787`, `--non-interactive` (semua jawaban dari env, untuk otomasi).
+
+### 1a. Token GitLab
+GitLab → avatar → **Preferences → Access Tokens** → scope **`api`**, beri tanggal kedaluwarsa.
+
+### 1b. Bot Telegram
+Di Telegram chat **@BotFather** → `/newbot` → salin tokennya ke wizard.
+
+### 1c. Flow Teams (supaya pesan tampil atas nama Anda)
 1. Buka **make.powerautomate.com** (login akun kantor) → **Create → Instant cloud flow** → *Skip*.
 2. Trigger: cari **"When a Teams webhook request is received"**. Who can trigger: *Anyone*.
 3. Tambah action **"Post message in a chat or channel"** (Microsoft Teams):
    - **Post as:** `User`
    - **Post in:** `Channel` (pilih Team & channel IDAS) atau `Group chat` (pilih grup IDAS)
    - **Message:** klik *Expression* → `triggerBody()?['text_html']`
-4. **Save**, buka lagi trigger-nya, salin URL → simpan sebagai `TEAMS_FLOW_URL`.
+4. **Save**, buka lagi trigger-nya, salin URL → tempel di wizard.
 
-> Connection Teams di flow memakai akun Anda, jadi pesan muncul sebagai Anda. Kalau trigger webhook Teams tidak tersedia di tenant, pakai **"When a HTTP request is received"** (mungkin perlu lisensi premium), atau set `teams.mode: telegram_copy`. Teks akan dikirim ke Telegram untuk Anda copy-paste.
+> Connection Teams di flow memakai akun Anda, jadi pesan muncul sebagai Anda. Tanpa flow, teks dikirim ke Telegram untuk Anda copy-paste (`TEAMS_MODE=telegram_copy`).
 
-### d. API AI (opsional)
-Isi `AI_API_KEY` jika memakai mode `llm` / `bot_then_llm`. Untuk gateway internal atau LLM lokal (Ollama, vLLM), pakai `provider: openai` + `base_url`.
+### Tanpa Docker (untuk development)
+```
+pip install -r requirements.txt
+python -m mr_pilot setup        # membuat config.yaml + .env di folder ini
+python -m mr_pilot              # jalan
+python -m mr_pilot --dry-run    # cek MR tanpa kirim/merge apa pun
+```
 
 ---
 
-## 2. Instalasi di komputer kantor (Windows)
+## 2. AI: provider, fallback, dan per tugas
 
-1. Install **Python 3.10+** dari python.org (centang *Add Python to PATH*).
-2. Ekstrak folder `mr-pilot`, lalu double-click **`setup.bat`**.
-3. Isi **`.env`** (token-token di atas) dan sesuaikan **`config.yaml`**:
-   - `gitlab.url`, opsional `gitlab.projects`
-   - `review.mode` dan `review.bot.usernames` (username akun bot review di MR Anda)
-   - `teams.templates`: tulis dengan gaya bahasa Anda sendiri
-4. Uji satu per satu (buka *Command Prompt* di folder ini):
-   ```
-   run.bat --test-telegram
-   run.bat --test-teams
-   run.bat --review idas/idas-repo-be!375
-   run.bat --dry-run
-   ```
-   `--dry-run` hanya mencetak apa yang akan dikirim, tanpa merge dan tanpa kirim pesan.
-5. Jalankan: **`run.bat`**
+Atur di **dashboard → AI**, atau lewat `.env` (wizard mengisinya).
 
-### Jalan otomatis saat login
-Task Scheduler → **Create Task**:
-- *General*: "Run only when user is logged on"
-- *Triggers*: **At log on**
-- *Actions*: Program `C:\path\mr-pilot\run.bat`, *Start in* `C:\path\mr-pilot`
-- *Settings*: centang "If the task fails, restart every 1 minute"
+| Provider | Kredensial di `data/.env` | Catatan |
+|---|---|---|
+| **Claude Code** | `CLAUDE_CODE_OAUTH_TOKEN` | Memakai **langganan** Pro/Max/Team lewat CLI `claude -p`. Di Docker: install dengan `--with-claude-code`, lalu jalankan `claude setup-token` sekali di PC yang sudah login dan tempel token-nya. Di PC tanpa Docker yang sudah login Claude Code, token tidak perlu. |
+| **Anthropic API** | `ANTHROPIC_API_KEY` | Default `claude-sonnet-5-5` |
+| **Google Gemini** | `GEMINI_API_KEY` | Default `gemini-3.8-flash` |
+| **OpenRouter** | `OPENROUTER_API_KEY` | Default `anthropic/claude-sonnet-5.5`; ratusan model lain |
+| **Groq** | `GROQ_API_KEY` | Default `openai/gpt-oss-120b`, sangat cepat dan murah untuk cek standar |
+| **OpenAI / kompatibel** | `OPENAI_API_KEY` | `base_url` bisa diarahkan ke gateway internal |
+| **Lokal** | tanpa key | Ollama (`http://localhost:11434/v1`), LM Studio (`:1234/v1`), vLLM. Dari Docker otomatis lewat `host.docker.internal`; atau `--with-ollama` untuk Ollama di dalam Docker. |
 
-Atur juga *Power Options → Sleep: Never* (atau saat dicolok listrik), supaya PC tidak tidur.
+- **Urutan fallback**: provider dicoba dari atas. Jika error, timeout, atau kena rate limit, otomatis pindah ke berikutnya. Atur dengan tombol ▲▼ di dashboard.
+- **Provider per tugas**: misalnya *Review MR* memakai Claude Code, *Cek standar kode* memakai Groq.
+- **Tes** mengecek koneksi dengan satu panggilan kecil. **Ambil daftar model** membaca model yang tersedia langsung dari provider.
+- Bisa **menambah provider** sendiri, misalnya akun OpenRouter kedua atau server Ollama lain.
+- API key yang diisi lewat dashboard disimpan di `data/ai_overrides.json` (izin file 600) dan tidak pernah dikirim balik ke browser (hanya 4 karakter terakhir).
+- Statistik 7 hari (jumlah panggilan, persentase sukses, rata-rata waktu) dan error terakhir tampil di tab yang sama.
+
+> Kode (diff) dikirim ke provider yang dipakai. Pastikan sesuai kebijakan perusahaan. Kalau tidak boleh keluar jaringan, pakai provider **Lokal**.
 
 ---
 
@@ -108,7 +139,7 @@ Contoh menambah aturan di `rules.yaml`:
 ```
 Uji aturan sebelum dipakai lewat dashboard (**Uji aturan otomatis**) atau dari command line:
 ```
-run.bat --check-standards C:\repo\internal\workflow\usecase.go
+python -m mr_pilot --check-standards internal/workflow/usecase.go
 ```
 
 ### Apa yang terjadi saat ada MR baru/commit baru
@@ -117,7 +148,7 @@ run.bat --check-standards C:\repo\internal\workflow\usecase.go
 3. **Satu komentar ringkasan** di MR yang di-update setiap ada commit baru (tidak spam), ditambah status commit `code-standard`.
 4. Kartu Telegram menampilkan jumlah error/warning. Jika ada **error**, tombol Merge meminta konfirmasi kedua.
 
-> Komentar diposting dari akun GitLab Anda. Coba dulu dengan `run.bat --dry-run`, yang hanya mencetak tanpa posting. Kalau terlalu ramai, naikkan `report.min_severity_to_post` ke `error` atau matikan `report.commit_comments`.
+> Komentar diposting dari akun GitLab Anda. Coba dulu dengan `python -m mr_pilot --dry-run` (atau `docker compose run --rm mr-pilot --dry-run`), yang hanya mencetak tanpa posting. Kalau terlalu ramai, naikkan `report.min_severity_to_post` ke `error` atau matikan `report.commit_comments`.
 
 `status_fail_on: error` membuat status commit merah jika ada error. Kalau project memakai "Pipelines must succeed", ini **ikut menahan merge**. Default-nya `none` (hanya informasi).
 
@@ -125,28 +156,56 @@ run.bat --check-standards C:\repo\internal\workflow\usecase.go
 
 ## 4. Dashboard
 
-Otomatis jalan bersama `run.bat` di **http://127.0.0.1:8787**.
+Jalan otomatis bersama MR Pilot di **http://127.0.0.1:8787** (atau IP server jika memakai `--server`). Password ada di `data/.env` (`DASHBOARD_PASSWORD`).
 
 - **Antrian**: MR yang menunggu keputusan, dengan bar umur (penuh = 24 jam), verdict, error/warning standar, dan pipeline. Klik baris untuk detail lengkap: masalah yang diselesaikan, perubahan, poin bagus, temuan, dan riwayat.
 - **Aktivitas langsung**: MR baru, review selesai, warning diposting, merge, dan tolak. Muncul seketika tanpa refresh (Server-Sent Events).
 - **Code quality**: tren pelanggaran per hari, aturan paling sering dilanggar, pelanggaran terbuka di MR aktif, per developer (untuk bahan coaching 1:1), dan file paling sering kena.
 - **Standar**: edit dokumen dan `rules.yaml`, simpan (divalidasi dulu), lalu uji aturan dengan potongan kode.
 
-Ingin lihat tampilannya dulu tanpa GitLab? Jalankan **`run.bat --demo`** (data contoh, nama fiktif).
+Ingin lihat tampilannya dulu tanpa GitLab? Jalankan **`setup.bat demo`** / `./setup.sh demo` (data contoh, nama fiktif, password `demo`).
 
-Membuka dari HP atau laptop lain di jaringan kantor: set `dashboard.host: 0.0.0.0` dan isi `DASHBOARD_PASSWORD` di `.env`. Tanpa password, dashboard menolak jalan di jaringan.
+Membuka dari HP atau laptop lain di jaringan kantor: install dengan `setup.bat -Server` / `./setup.sh --server`. Dashboard selalu memakai password.
 
 ---
 
-## 5. Keamanan
+## 5. CI/CD (GitHub Actions / GitLab CI)
+
+Sudah tersedia **`.github/workflows/mr-pilot.yml`** dan **`.gitlab-ci.yml`**. Setiap push ke `main`/`master`:
+
+```
+test (pytest, lint, validasi rules.yaml) → build image (GHCR / GitLab Registry) → deploy ke server via SSH
+```
+Pull request / MR hanya menjalankan test.
+
+### Konfigurasi otomatis: `setup.bat ci` / `./setup.sh ci`
+Jalankan dari PC Anda, di folder repo yang sudah di-push ke GitHub atau GitLab:
+1. **Mendeteksi** GitHub atau GitLab dari `git remote origin`.
+2. Menanyakan **server tujuan** (host, user, port, folder; default `/opt/mr-pilot`).
+3. Membuat **SSH deploy key** khusus, lalu memasangnya di server. Password SSH server ditanya **sekali**.
+4. **Menyiapkan server**: memasang Docker jika belum ada, membuat folder, mengunggah `docker-compose.yml` + skrip deploy, dan menyalin `data/config.yaml`, `.env`, standar, serta pengaturan AI dari PC Anda.
+5. **Mengisi secrets/variables CI** lewat API: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PORT`, `DEPLOY_PATH`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`.
+   - GitHub: butuh token (fine-grained PAT untuk repo ini, izin **Secrets: read & write**). Secret dienkripsi sesuai API GitHub.
+   - GitLab: memakai `GITLAB_TOKEN` jika repo di GitLab yang sama, butuh role **Maintainer**.
+6. Lalu `git push`, dan pipeline berjalan.
+
+Deploy di server menjalankan `deploy/remote-deploy.sh`: login registry dengan token job, `docker compose pull`, `up -d`, cek `/healthz`, lalu membersihkan image lama. Jika health check gagal, job merah dan 50 baris log terakhir ditampilkan.
+
+> GitLab Runner butuh executor Docker dengan *privileged* untuk `docker:dind`. Jika runner kantor tidak mengizinkan, ganti job `build` ke Kaniko.
+
+---
+
+## 6. Keamanan
 
 - Hanya `chat_id` / `allowed_user_ids` yang bisa menekan tombol. Pakai **chat pribadi** dengan bot, jangan grup.
-- Token ada di `.env`. Jangan di-commit, jangan dibagikan. Token GitLab sama dengan akses penuh akun Anda.
+- Token ada di `data/.env`. Jangan di-commit, jangan dibagikan. Token GitLab sama dengan akses penuh akun Anda.
+- Container berjalan sebagai user biasa (bukan root). Dashboard di Docker selalu memakai password.
+- Deploy key CI hanya dipakai untuk server MR Pilot. Cabut dengan menghapus barisnya di `~/.ssh/authorized_keys` server.
 - Mode `llm` mengirim diff kode ke provider AI. Pastikan sesuai kebijakan perusahaan (atau pakai LLM internal).
 - Dashboard hanya bisa diakses dari PC itu sendiri, kecuali Anda membukanya ke jaringan dengan password.
 - Semua aksi tercatat di `logs/mr-pilot.log`. Status MR tersimpan di `mr_pilot.db` (hapus file ini untuk reset).
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 | Gejala | Solusi |
 |---|---|
@@ -156,6 +215,11 @@ Membuka dari HP atau laptop lain di jaringan kantor: set `dashboard.host: 0.0.0.
 | Teams `gagal: HTTP 4xx` | URL flow salah/kedaluwarsa, atau flow nonaktif. Cek *Run history* di Power Automate |
 | Merge gagal 405/406 | MR belum mergeable (approval wajib, conflict, discussion belum resolved) |
 | Warning tidak muncul di baris commit | Baris tersebut bukan bagian diff commit itu. Ringkasan tetap ada di MR |
+| `setup.bat`: "Docker belum berjalan" | Buka Docker Desktop, tunggu status *running*, ulangi |
+| Linux: `permission denied ... docker.sock` | Logout/login (grup docker baru aktif), atau jalankan lagi; skrip memakai sudo otomatis |
+| Claude Code: "belum login" | Jalankan `claude setup-token` di PC yang sudah login, tempel token di dashboard > AI |
+| AI lokal tidak terhubung dari Docker | Pastikan Ollama listen di `0.0.0.0` (`OLLAMA_HOST=0.0.0.0`) atau pakai `--with-ollama` |
+| Deploy CI gagal "config.yaml belum ada" | Jalankan `setup.bat ci` lagi dan pilih salin config ke server |
 | Dashboard tidak bisa dibuka dari HP | `dashboard.host: 0.0.0.0`, isi password, dan izinkan port 8787 di Windows Firewall |
 
-Uji kode: `python -m pytest -q`
+Uji kode: `pip install pytest && python -m pytest -q`

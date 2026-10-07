@@ -5,7 +5,7 @@ import re
 
 import yaml
 
-_ENV = re.compile(r"\$\{([A-Za-z0-9_]+)\}")
+_ENV = re.compile(r"\$\{([A-Za-z0-9_]+)(?::-([^}]*))?\}")
 
 DEFAULTS = {
     "gitlab": {
@@ -84,6 +84,22 @@ DEFAULTS = {
             "comment_footer": "Pengecekan standar kode otomatis",
         },
     },
+    "ai": {
+        # enabled: auto = aktif otomatis jika API key / login tersedia
+        "providers": {
+            "claude_code": {"type": "claude_code", "enabled": "auto"},
+            "anthropic": {"type": "anthropic", "enabled": "auto"},
+            "gemini": {"type": "gemini", "enabled": "auto"},
+            "openrouter": {"type": "openrouter", "enabled": "auto"},
+            "groq": {"type": "groq", "enabled": "auto"},
+            "openai": {"type": "openai", "enabled": "auto"},
+            "local": {"type": "local", "enabled": "auto"},
+        },
+        "order": ["claude_code", "anthropic", "gemini", "openrouter", "groq", "openai", "local"],
+        "tasks": {},
+        "timeout": 300,
+        "overrides_file": "ai_overrides.json",
+    },
     "dashboard": {
         "enabled": True,
         "host": "127.0.0.1",
@@ -102,9 +118,23 @@ DEFAULTS = {
 }
 
 
+def _coerce(s):
+    low = s.strip().lower()
+    if low in ("true", "yes", "on"):
+        return True
+    if low in ("false", "no", "off"):
+        return False
+    if re.fullmatch(r"-?\d+", s.strip()):
+        return int(s)
+    return s
+
+
 def _expand(v):
     if isinstance(v, str):
-        return _ENV.sub(lambda m: os.environ.get(m.group(1), ""), v)
+        whole = _ENV.fullmatch(v.strip())
+        out = _ENV.sub(lambda m: os.environ.get(m.group(1)) or (m.group(2) or ""), v)
+        # "${X}" sendirian -> boleh jadi bool/int (mis. enabled: ${CODE_QUALITY_ENABLED:-true})
+        return _coerce(out) if whole and out != "" else out
     if isinstance(v, dict):
         return {k: _expand(x) for k, x in v.items()}
     if isinstance(v, list):

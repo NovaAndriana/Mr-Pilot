@@ -1,4 +1,4 @@
-"""CLI entry: python -m mr_pilot [--config config.yaml] [command]"""
+"""CLI entry: python -m mr_pilot [--config config.yaml] [run|setup|doctor|setup-ci|demo] [opsi]"""
 import argparse
 import json
 import logging
@@ -24,7 +24,14 @@ def setup_logging(path):
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="mr_pilot", description="Auto review + merge MR GitLab via Telegram")
-    p.add_argument("--config", default="config.yaml")
+    p.add_argument("command", nargs="?", default="run",
+                   choices=["run", "setup", "doctor", "setup-ci", "demo", "dashboard"],
+                   help="run (default) | setup: wizard konfigurasi | doctor: cek koneksi | "
+                        "setup-ci: pasang CI/CD + deploy | demo: dashboard data contoh")
+    p.add_argument("--config", default=os.environ.get("MRP_CONFIG", "config.yaml"))
+    p.add_argument("--non-interactive", action="store_true", help="setup/setup-ci: ambil jawaban dari env")
+    p.add_argument("--src", default=os.environ.get("MRP_SRC", "."), help="setup-ci: folder repo (default .)")
+    p.add_argument("--no-ai-test", action="store_true", help="doctor: jangan panggil AI")
     p.add_argument("--once", action="store_true", help="cek GitLab sekali lalu keluar")
     p.add_argument("--dry-run", action="store_true", help="tidak kirim apa pun, hanya cetak")
     p.add_argument("--get-chat-id", action="store_true", help="tampilkan chat id Telegram Anda")
@@ -39,8 +46,52 @@ def main(argv=None):
 
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    data_dir = os.path.dirname(os.path.abspath(a.config))
+    if a.demo:
+        a.command = "demo"
+    elif a.dashboard_only:
+        a.command = "dashboard"
+
+    if a.command == "setup":
+        from .setup_wizard import run_setup
+        try:
+            sys.exit(run_setup(data_dir, interactive=not a.non_interactive))
+        except (KeyboardInterrupt, EOFError):
+            print("\nSetup dibatalkan.")
+            sys.exit(130)
+    if a.command == "setup-ci":
+        from .setup_ci import run_setup_ci
+        try:
+            sys.exit(run_setup_ci(os.path.abspath(a.src), data_dir, interactive=not a.non_interactive))
+        except (KeyboardInterrupt, EOFError):
+            print("\nDibatalkan.")
+            sys.exit(130)
+
+    if not os.path.exists(a.config):
+        if a.command == "demo":
+            from .setup_wizard import PKG_ROOT
+            a.config = os.path.join(PKG_ROOT, "config.example.yaml")
+        else:
+            print(f"Config {a.config} belum ada. Jalankan setup dulu:\n"
+                  "  Docker : ./setup.sh   (Windows: setup.bat)\n"
+                  "  Lokal  : python -m mr_pilot setup")
+            if os.environ.get("MRP_IN_DOCKER") == "1" and a.command == "run":
+                while not os.path.exists(a.config):  # don't crash-loop the container; wait for setup
+                    time.sleep(10)
+            else:
+                sys.exit(2)
+    from .setup_wizard import bootstrap_data_dir
+    if a.command == "run" and os.path.basename(a.config) == "config.yaml":
+        bootstrap_data_dir(data_dir)  # standards/ & home/ on first start
     cfg = load_config(a.config)
+    if a.command == "demo":
+        import tempfile
+        cfg["storage"]["log_file"] = os.path.join(tempfile.gettempdir(), "mr-pilot-demo.log")
     setup_logging(cfg["storage"]["log_file"])
+
+    if a.command == "doctor":
+        from .setup_wizard import run_doctor
+        sys.exit(run_doctor(cfg, test_ai=not a.no_ai_test))
 
     from .telegram_api import Telegram
     if a.get_chat_id:
@@ -84,15 +135,24 @@ def main(argv=None):
         print(f"{total} pelanggaran.")
         return
 
+    if a.command == "demo":
+        a.demo = True
+    if a.command == "dashboard":
+        a.dashboard_only = True
     if a.demo or a.dashboard_only:
         from .dashboard import Dashboard
         from .store import Store
         if a.demo:
             from .demo import seed, simulate
+            import tempfile
             store = Store(":memory:")
             seed(store)
             simulate(store)
             cfg["code_quality"]["enabled"] = True
+            cfg["_base_dir"] = tempfile.mkdtemp(prefix="mrp-demo-")  # AI overrides don't touch real config
+            if not cfg["dashboard"].get("password") and cfg["dashboard"]["host"] not in ("127.0.0.1", "localhost"):
+                cfg["dashboard"]["password"] = "demo"
+                print("Password demo: demo")
         else:
             store = Store(cfg["storage"]["db_path"])
         dash = Dashboard(cfg, store)
@@ -125,7 +185,7 @@ def main(argv=None):
     if cfg["dashboard"].get("enabled"):
         from .dashboard import Dashboard
         try:
-            d = Dashboard(cfg, app.store)
+            d = Dashboard(cfg, app.store, app.ai)
             d.start_background()
             print(f"Dashboard: http://{d.host}:{d.port}")
         except Exception as ex:

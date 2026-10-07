@@ -43,6 +43,9 @@ class Store:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, type TEXT,
                 mr_key TEXT, title TEXT, detail TEXT, level TEXT);
             CREATE INDEX IF NOT EXISTS ix_events_ts ON events(ts);
+            CREATE TABLE IF NOT EXISTS ai_calls(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, provider TEXT, task TEXT,
+                ok INTEGER, ms INTEGER, error TEXT);
         """)
         have = {r[1] for r in self.db.execute("PRAGMA table_info(mrs)")}
         for col, typ in _EXTRA_COLS.items():
@@ -152,6 +155,23 @@ class Store:
         with self.lock:
             r = self.db.execute("SELECT MAX(id) FROM events").fetchone()
         return r[0] or 0
+
+    # ------------------------------------------------------------- ai usage
+    def add_ai_call(self, provider, task, ok, ms, error=""):
+        with self.lock:
+            self.db.execute("INSERT INTO ai_calls(ts,provider,task,ok,ms,error) VALUES(?,?,?,?,?,?)",
+                            (time.time(), provider, task, int(bool(ok)), ms, (error or "")[:300]))
+            self.db.commit()
+
+    def ai_stats(self, days=7):
+        since = time.time() - days * 86400
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT provider, COUNT(*) n, SUM(ok) ok, AVG(CASE WHEN ok=1 THEN ms END) avg_ms, MAX(ts) last_ts "
+                "FROM ai_calls WHERE ts>=? GROUP BY provider", (since,)).fetchall()
+            errs = self.db.execute("SELECT provider, task, ts, error FROM ai_calls WHERE ok=0 AND ts>=? "
+                                   "ORDER BY ts DESC LIMIT 15", (since,)).fetchall()
+        return {"by_provider": [dict(r) for r in rows], "recent_errors": [dict(r) for r in errs]}
 
     # ------------------------------------------------------------- dashboard
     def query(self, sql, params=()):

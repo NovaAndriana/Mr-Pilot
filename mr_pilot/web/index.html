@@ -200,6 +200,36 @@ input[type=text] { width:100%; border:1px solid var(--line); border-radius:8px; 
 .kv dt { color:var(--ink-2); } .kv dd { margin:0; }
 .note { background:var(--surface-2); border-radius:8px; padding:12px 14px; color:var(--ink-2); font-size:13px; }
 
+/* ---------- ai */
+.prov { list-style:none; margin:0; padding:0; }
+.pv { border-top:1px solid var(--line); }
+.pv:first-child { border-top:0; }
+.pv-h { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:4px 14px; align-items:center; padding:14px 18px; }
+.pv-ord { display:flex; flex-direction:column; gap:2px; }
+.pv-ord button { background:none; border:1px solid var(--line); border-radius:6px; width:26px; height:20px; cursor:pointer; font-size:11px; line-height:1; color:var(--ink-2); }
+.pv-ord button:disabled { opacity:.35; cursor:default; }
+.pv-name { font-weight:600; }
+.pv-name .n { font-family:var(--mono); font-weight:500; color:var(--accent); margin-right:8px; }
+.pv-sub { color:var(--ink-2); font-size:13px; display:flex; gap:12px; flex-wrap:wrap; }
+.pv-sub .mono { color:var(--muted); }
+.pv-act { display:flex; gap:8px; align-items:center; }
+.pv-body { padding:0 18px 18px 58px; display:grid; gap:10px; }
+.pv-body[hidden] { display:none; }
+.pv-body label { font-size:12px; color:var(--ink-2); display:block; margin-bottom:3px; }
+.switch { position:relative; width:38px; height:22px; flex:none; }
+.switch input { opacity:0; width:100%; height:100%; margin:0; position:absolute; cursor:pointer; z-index:1; }
+.switch span { position:absolute; inset:0; border-radius:999px; background:var(--line-2); transition:background .15s; }
+.switch span::after { content:""; position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:#fff; transition:transform .15s; }
+.switch input:checked + span { background:var(--add); }
+.switch input:checked + span::after { transform:translateX(16px); }
+.switch input:focus-visible + span { outline:2px solid var(--accent); outline-offset:2px; }
+select { border:1px solid var(--line); border-radius:8px; padding:7px 10px; background:var(--surface-2); color:var(--ink); font:13px var(--sans); }
+input[type=password] { width:100%; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--surface-2); color:var(--ink); font:13px var(--mono); }
+.status-pill { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:500; padding:1px 8px; border-radius:999px; max-width:100%; overflow-wrap:anywhere; }
+.status-pill.ok { background:var(--add-soft); color:var(--add); }
+.status-pill.no { background:var(--surface-2); color:var(--ink-2); }
+@media (max-width: 640px) { .pv-h { grid-template-columns:auto minmax(0,1fr); } .pv-act { grid-column:2; } .pv-body { padding-left:18px; } }
+
 /* ---------- drawer */
 .scrim { position:fixed; inset:0; background:rgba(10,14,20,.35); z-index:9; }
 .drawer { position:fixed; top:0; right:0; bottom:0; width:min(620px, 100%); background:var(--surface); z-index:10; overflow:auto;
@@ -226,6 +256,7 @@ input[type=text] { width:100%; border:1px solid var(--line); border-radius:8px; 
       <button role="tab" data-view="queue" aria-selected="true">Antrian</button>
       <button role="tab" data-view="quality" aria-selected="false">Code quality</button>
       <button role="tab" data-view="standards" aria-selected="false">Standar</button>
+      <button role="tab" data-view="ai" aria-selected="false">AI</button>
       <button role="tab" data-view="activity" aria-selected="false">Aktivitas</button>
     </nav>
     <div class="status">
@@ -314,6 +345,36 @@ input[type=text] { width:100%; border:1px solid var(--line); border-radius:8px; 
     </div>
   </section>
 
+  <!-- ===================== AI -->
+  <section class="view" id="v-ai" hidden>
+    <div class="layout">
+      <div>
+        <div class="panel">
+          <div class="panel-h"><h2>Provider AI</h2><span class="muted">dicoba berurutan dari atas; yang gagal otomatis diganti berikutnya</span></div>
+          <ul class="prov" id="prov"></ul>
+        </div>
+        <div class="panel" style="margin-top:24px">
+          <div class="panel-h"><h2>Tambah provider</h2><span class="muted">mis. akun OpenRouter kedua atau server Ollama lain</span></div>
+          <div class="panel-b row">
+            <select id="new-type" aria-label="Tipe provider"></select>
+            <input type="text" id="new-name" placeholder="nama, mis. ollama-kantor" style="max-width:240px">
+            <button class="btn ghost" id="new-add">Tambah</button><span class="msg" id="new-msg"></span>
+          </div>
+        </div>
+      </div>
+      <aside>
+        <div class="panel">
+          <div class="panel-h"><h2>Provider per tugas</h2></div>
+          <div class="panel-b" id="routes"></div>
+        </div>
+        <div class="panel" style="margin-top:24px">
+          <div class="panel-h"><h2>Pemakaian 7 hari</h2></div>
+          <div class="tscroll" id="ai-stats"></div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
   <!-- ===================== AKTIVITAS -->
   <section class="view" id="v-activity" hidden>
     <div class="filters"><span class="muted">Tampilkan</span><div class="seg" id="a-filter"></div></div>
@@ -389,6 +450,7 @@ let view = "queue";
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => show(b.dataset.view));
 function show(v) {
   view = v;
+  if (v === "ai") aiData = null;  // segarkan statistik setiap tab AI dibuka
   document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.view === v)));
   document.querySelectorAll(".view").forEach(s => s.hidden = s.id !== "v-" + v);
   history.replaceState(null, "", "#" + v);
@@ -623,7 +685,7 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeDetail(
 
 /* ================================================================ feed */
 let feedLoaded = false, feedEvents = [];
-const EVLABEL = { all: "Semua", mr_new: "MR baru", review: "Review", quality: "Standar kode", merged: "Merge", rejected: "Tolak", error: "Error", standards: "Perubahan standar", system: "Sistem" };
+const EVLABEL = { all: "Semua", mr_new: "MR baru", review: "Review", quality: "Standar kode", merged: "Merge", rejected: "Tolak", error: "Error", standards: "Perubahan standar", ai: "AI", system: "Sistem" };
 function feedItem(ev, flash) {
   return `<li class="lv-${esc(ev.level || "info")} ${flash ? "flash" : ""}"><span class="dot"></span><div>
     <div class="t">${esc(ev.title)}</div>${ev.detail ? `<div class="d">${esc(ev.detail)}</div>` : ""}<div class="w">${esc(clock(ev.ts))}</div></div></li>`;
@@ -749,6 +811,116 @@ $("#t-run").onclick = async () => {
     : `<p class="msg ok">Tidak ada aturan yang kena.</p>`;
 };
 
+/* ================================================================ ai */
+let aiData = null, aiOpen = new Set();
+async function loadAI(data) {
+  aiData = data || await api("/api/ai");
+  const d = aiData;
+  $("#prov").innerHTML = d.providers.map((p, i) => `
+    <li class="pv" data-name="${esc(p.name)}">
+      <div class="pv-h">
+        <div class="pv-ord">
+          <button data-mv="-1" ${i === 0 ? "disabled" : ""} aria-label="Naikkan ${esc(p.name)}">▲</button>
+          <button data-mv="1" ${i === d.providers.length - 1 ? "disabled" : ""} aria-label="Turunkan ${esc(p.name)}">▼</button>
+        </div>
+        <div style="min-width:0">
+          <div class="pv-name"><span class="n">${i + 1}. ${esc(p.name)}</span>${esc(p.type_label)}</div>
+          <div class="pv-sub"><span class="mono">${esc(p.model || "-")}</span>
+            ${p.ready ? '<span class="status-pill ok">✓ Siap dipakai</span>' : `<span class="status-pill no">${esc(p.reason)}</span>`}
+            ${p.key_set ? `<span>key ${esc(p.key_hint)}</span>` : ""}</div>
+        </div>
+        <div class="pv-act">
+          <label class="switch" title="${p.enabled ? "Nonaktifkan" : "Aktifkan"}"><input type="checkbox" data-en ${p.enabled ? "checked" : ""} aria-label="Aktifkan ${esc(p.name)}"><span></span></label>
+          <button class="btn ghost" data-test>Tes</button>
+          <button class="btn ghost" data-edit aria-expanded="${aiOpen.has(p.name)}">Atur</button>
+        </div>
+      </div>
+      <div class="pv-body" ${aiOpen.has(p.name) ? "" : "hidden"}>
+        <div class="msg" data-test-out></div>
+        <div><label>Model</label><div class="row" style="flex-wrap:nowrap"><input type="text" data-f="model" value="${esc(p.model || "")}" list="ml-${esc(p.name)}"><datalist id="ml-${esc(p.name)}"></datalist>
+          <button class="btn ghost" data-models style="white-space:nowrap">Ambil daftar model</button></div><div class="msg" data-models-out></div></div>
+        ${p.type === "claude_code" ? "" : `<div><label>Base URL</label><input type="text" data-f="base_url" value="${esc(p.base_url || "")}"></div>`}
+        ${p.type === "local" ? "" : `<div><label>${p.type === "claude_code" ? "Token Claude Code (hasil <span class=mono>claude setup-token</span>) atau API key" : "API key"}${p.key_env ? ` <span class="muted">— atau isi <span class="mono">${esc(p.key_env)}</span> di .env</span>` : ""}</label>
+          <input type="password" data-f="api_key" autocomplete="off" placeholder="${p.key_set ? "Tersimpan (" + esc(p.key_hint) + "). Kosongkan untuk tetap memakai yang lama." : "Tempel key di sini"}"></div>`}
+        ${p.type === "claude_code" ? `<p class="note" style="margin:0">Memakai CLI <span class="mono">claude</span> dengan langganan Pro/Max/Team. Di komputer yang sudah login Claude Code, tidak perlu token. Untuk server atau Docker, jalankan <span class="mono">claude setup-token</span> sekali lalu tempel token-nya di sini.</p>` : ""}
+        ${p.type === "local" ? `<p class="note" style="margin:0">Ollama: <span class="mono">http://localhost:11434/v1</span>. LM Studio: <span class="mono">http://localhost:1234/v1</span>. Dari Docker, MR Pilot otomatis memakai <span class="mono">host.docker.internal</span>.</p>` : ""}
+        <div class="row"><button class="btn" data-save>Simpan provider</button>
+          ${p.key_set ? '<button class="btn ghost" data-clear>Hapus key tersimpan</button>' : ""}
+          ${p.custom ? '<button class="btn ghost" data-del>Hapus provider</button>' : ""}<span class="msg" data-save-out></span></div>
+      </div>
+    </li>`).join("");
+  $("#prov").querySelectorAll(".pv").forEach(li => wireProvider(li));
+  $("#new-type").innerHTML = Object.entries(d.types).map(([k, v]) => `<option value="${esc(k)}">${esc(v.label)}</option>`).join("");
+  $("#routes").innerHTML = Object.entries(d.task_labels).map(([k, label]) => `
+    <div style="margin-bottom:12px"><label class="muted" style="font-size:13px;display:block;margin-bottom:4px" for="rt-${k}">${esc(label)}</label>
+    <select id="rt-${k}" data-task="${k}" style="width:100%"><option value="">Ikuti urutan provider</option>
+    ${d.providers.map(p => `<option value="${esc(p.name)}" ${d.tasks[k] === p.name ? "selected" : ""}>Utamakan ${esc(p.name)}</option>`).join("")}</select></div>`).join("")
+    + `<p class="muted" style="font-size:12px;margin:0">Misalnya: review pakai Claude Code, cek standar pakai Groq yang lebih murah. Kalau provider pilihan gagal, tetap lanjut ke urutan provider.</p>`;
+  $("#routes").querySelectorAll("select").forEach(s => s.onchange = async () => {
+    const tasks = { ...aiData.tasks }; if (s.value) tasks[s.dataset.task] = s.value; else delete tasks[s.dataset.task];
+    await loadAI(await api("/api/ai", { method: "PUT", body: JSON.stringify({ tasks }) }));
+  });
+  const st = d.stats.by_provider;
+  $("#ai-stats").innerHTML = (st.length ? `<table><thead><tr><th>Provider</th><th class="num">Panggilan</th><th class="num">Sukses</th><th class="num">Rata-rata</th></tr></thead><tbody>` +
+    st.map(r => `<tr><td class="mono">${esc(r.provider)}</td><td class="num">${fmt(r.n)}</td><td class="num">${Math.round((r.ok || 0) / r.n * 100)}%</td><td class="num">${r.avg_ms ? (r.avg_ms / 1000).toFixed(1) + " dtk" : "–"}</td></tr>`).join("") + `</tbody></table>`
+    : `<div class="empty">Belum ada panggilan AI.</div>`)
+    + (d.stats.recent_errors.length ? `<div class="panel-b" style="border-top:1px solid var(--line)"><strong style="font-size:13px">Error terakhir</strong><ul style="margin:6px 0 0;padding-left:18px;font-size:12px">` +
+      d.stats.recent_errors.slice(0, 6).map(e => `<li><span class="mono">${esc(e.provider)}</span> ${esc(ago(e.ts))}: <span class="muted">${esc(e.error)}</span></li>`).join("") + `</ul></div>` : "");
+}
+function wireProvider(li) {
+  const name = li.dataset.name, body = li.querySelector(".pv-body");
+  const put = patch => api("/api/ai", { method: "PUT", body: JSON.stringify(patch) });
+  li.querySelectorAll("[data-mv]").forEach(b => b.onclick = async () => {
+    const order = aiData.order.slice(), i = order.indexOf(name), j = i + +b.dataset.mv;
+    [order[i], order[j]] = [order[j], order[i]];
+    await loadAI(await put({ order }));
+  });
+  li.querySelector("[data-en]").onchange = async e => loadAI(await put({ providers: { [name]: { enabled: e.target.checked } } }));
+  li.querySelector("[data-edit]").onclick = e => {
+    body.hidden = !body.hidden; e.target.setAttribute("aria-expanded", String(!body.hidden));
+    body.hidden ? aiOpen.delete(name) : aiOpen.add(name);
+  };
+  li.querySelector("[data-test]").onclick = async e => {
+    const out = li.querySelector("[data-test-out]");
+    body.hidden = false; aiOpen.add(name); e.target.disabled = true; out.className = "msg"; out.textContent = "Menguji koneksi…";
+    const r = await api("/api/ai/test", { method: "POST", body: JSON.stringify({ name }) }).catch(x => ({ ok: false, error: x.message }));
+    e.target.disabled = false;
+    out.className = "msg " + (r.ok ? "ok" : "bad");
+    out.textContent = r.ok ? `Berhasil dalam ${(r.ms / 1000).toFixed(1)} detik. Balasan: ${r.reply}` : `Gagal: ${r.error}`;
+  };
+  li.querySelector("[data-models]").onclick = async e => {
+    const out = li.querySelector("[data-models-out]"); e.target.disabled = true; out.className = "msg"; out.textContent = "Mengambil…";
+    const r = await api("/api/ai/models", { method: "POST", body: JSON.stringify({ name }) });
+    e.target.disabled = false;
+    li.querySelector("datalist").innerHTML = r.models.map(m => `<option value="${esc(m)}">`).join("");
+    out.className = "msg " + (r.error ? "bad" : "ok");
+    out.textContent = r.error ? "Gagal: " + r.error : `${r.models.length} model tersedia. Klik kolom model untuk memilih.`;
+  };
+  li.querySelector("[data-save]").onclick = async () => {
+    const patch = {};
+    li.querySelectorAll("[data-f]").forEach(inp => { if (inp.dataset.f !== "api_key" || inp.value) patch[inp.dataset.f] = inp.value.trim(); });
+    const out = li.querySelector("[data-save-out]");
+    try { await loadAI(await put({ providers: { [name]: patch } })); flashMsg(name, "Tersimpan."); }
+    catch (x) { out.className = "msg bad"; out.textContent = x.message; }
+  };
+  const clr = li.querySelector("[data-clear]");
+  if (clr) clr.onclick = async () => loadAI(await put({ providers: { [name]: { clear_key: true } } }));
+  const del = li.querySelector("[data-del]");
+  if (del) del.onclick = async () => { if (confirm("Hapus provider " + name + "?")) { aiOpen.delete(name); loadAI(await put({ delete: [name], order: aiData.order.filter(n => n !== name) })); } };
+}
+function flashMsg(name, text) {
+  const li = $(`#prov .pv[data-name="${CSS.escape(name)}"]`); if (!li) return;
+  const out = li.querySelector("[data-save-out]"); out.className = "msg ok"; out.textContent = text;
+}
+$("#new-add").onclick = async () => {
+  const name = $("#new-name").value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-"), type = $("#new-type").value;
+  if (!name) { $("#new-msg").className = "msg bad"; $("#new-msg").textContent = "Isi nama provider."; return; }
+  if (aiData.providers.some(p => p.name === name)) { $("#new-msg").className = "msg bad"; $("#new-msg").textContent = "Nama sudah dipakai."; return; }
+  aiOpen.add(name);
+  await loadAI(await api("/api/ai", { method: "PUT", body: JSON.stringify({ providers: { [name]: { type, enabled: true } }, order: [...aiData.order, name] }) }));
+  $("#new-name").value = ""; $("#new-msg").className = "msg ok"; $("#new-msg").textContent = "Ditambahkan. Lengkapi model dan key di daftar.";
+};
+
 /* ================================================================ realtime */
 let timer = null;
 function refresh() {
@@ -759,6 +931,7 @@ function refresh() {
       else if (view === "quality") await loadQuality();
       else if (view === "standards") { if (!stdData) await loadStandards(); }
       else if (view === "activity") await loadActivity();
+      else if (view === "ai") { if (!aiData) await loadAI(); }
       if (view !== "queue" && !summary) loadSummary();
     } catch (e) { if (e.message !== "login") console.error(e); }
   }, 150);
@@ -769,7 +942,7 @@ function connect() {
   es.addEventListener("activity", m => {
     const ev = JSON.parse(m.data);
     pushEvent(ev);
-    if (ev.type === "standards" && view === "standards") return;
+    if ((ev.type === "standards" && view === "standards") || (ev.type === "ai" && view === "ai")) return;
     refresh();
   });
   es.onerror = () => { $("#live").className = "live off"; $("#live-t").textContent = "Terputus, menyambung ulang"; };
@@ -778,7 +951,7 @@ window.addEventListener("resize", () => { clearTimeout(window._rz); window._rz =
 setInterval(() => { if (view === "queue") refresh(); }, 60000);
 
 const start = (location.hash || "#queue").slice(1);
-show(["queue", "quality", "standards", "activity"].includes(start) ? start : "queue");
+show(["queue", "quality", "standards", "ai", "activity"].includes(start) ? start : "queue");
 connect();
 </script>
 </body>
