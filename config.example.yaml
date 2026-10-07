@@ -1,0 +1,114 @@
+# Salin jadi config.yaml. Rahasia (token/API key) taruh di file .env
+# lalu panggil di sini dengan ${NAMA_VARIABEL}.
+
+gitlab:
+  url: https://code.idas.id
+  token: ${GITLAB_TOKEN}          # Personal Access Token scope: api
+  username: ""                    # kosong = otomatis dari token
+  verify_ssl: true                # false jika GitLab internal pakai self-signed cert
+  poll_interval_seconds: 120      # cek MR baru tiap 2 menit
+  skip_draft: true                # abaikan MR Draft
+  also_assigned_to_me: false      # true = MR yang assignee-nya Anda juga ikut dicek
+  projects: []                    # contoh: ["idas/idas-repo-be"]; kosong = semua project
+
+telegram:
+  bot_token: ${TELEGRAM_BOT_TOKEN}
+  chat_id: ${TELEGRAM_CHAT_ID}    # chat pribadi Anda dengan bot
+  allowed_user_ids: []            # kosong = hanya chat_id di atas yang boleh tap tombol
+  proxy: ""                       # isi jika jaringan kantor perlu proxy, mis. http://proxy:8080
+  startup_message: true
+
+review:
+  # llm          = selalu review pakai API AI
+  # bot          = baca komentar bot "AI Code Review" yang sudah ada di MR
+  # bot_then_llm = tunggu komentar bot; kalau tidak muncul dalam wait_minutes, pakai API AI
+  mode: bot_then_llm
+  bot:
+    usernames: ["system"]         # username akun bot yang posting review di MR
+    marker: "AI Code Review"      # atau dikenali dari teks ini di komentar
+    wait_minutes: 15
+  llm:
+    provider: anthropic           # anthropic | openai (openai = semua API OpenAI-compatible)
+    api_key: ${AI_API_KEY}
+    model: claude-sonnet-5-5
+    base_url: ""                  # kosong = default provider; isi untuk gateway/LLM lokal
+    max_diff_chars: 120000
+    language: Indonesia
+    extra_rules: |
+      - Perubahan bentuk response API (array jadi object, field null, dsb.) selalu dicatat sebagai breaking change.
+      - Query repository tanpa filter dianggap blocker.
+  ignore_files: ["*.lock", "go.sum", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+                 "vendor/*", "*.min.js", "*.snap"]
+
+merge:
+  require_pipeline_success: true  # tolak merge jika pipeline belum hijau
+  allow_no_pipeline: true
+  approve_before_merge: true      # klik "Approve" atas nama Anda sebelum merge
+  remove_source_branch: true
+  squash: false
+  confirm_if_not_approved: true   # minta konfirmasi kedua jika verdict bukan Approve
+  confirm_if_quality_errors: true # minta konfirmasi kedua jika ada error standar kode
+
+code_quality:
+  enabled: true                   # false = fitur standar kode mati
+  standards_dir: standards        # tulis standar di sini (atau lewat dashboard > Standar)
+  general_document: general.md    # standar umum, berlaku semua stack
+  rules_file: rules.yaml          # aturan regex yang dicek di setiap commit
+  stacks:                         # stack ditentukan dari path file
+    go:
+      name: Backend Go
+      paths: ["**/*.go"]
+      document: go.md
+    react:
+      name: Frontend React
+      paths: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
+      exclude: ["mobile/**", "**/node_modules/**"]
+      document: react.md
+    react-native:
+      name: Mobile React Native
+      paths: ["mobile/**/*.ts", "mobile/**/*.tsx"]
+      document: react-native.md
+  conventions:
+    mr_title_pattern: '^(feat|fix|refactor|perf|test|docs|chore|ci|build|revert)(\([A-Z][A-Z0-9]+-\d+\))?!?: .+'
+    commit_message_pattern: '^(feat|fix|refactor|perf|test|docs|chore|ci|build|revert)(\(.+\))?!?: .+'
+    commit_message_severity: info
+    pr_checklist: pr-checklist.md
+    require_pr_checklist: warn_unchecked   # off | present | warn_unchecked
+  ai_check: true                  # AI membandingkan diff dengan dokumen standar (.md); butuh review.llm.api_key
+  ai_min_confidence: high         # hanya temuan AI yang yakin yang dipakai
+  report:
+    commit_comments: true         # warning diposting di COMMIT-nya (file + baris)
+    min_severity_to_post: warning # info tidak diposting, hanya tampil di dashboard/Telegram
+    max_comments_per_commit: 10
+    ai_inline_comments: true      # temuan AI jadi komentar inline di diff MR
+    mr_summary_note: true         # satu komentar ringkasan di MR, di-update setiap ada commit baru
+    commit_status: true           # status "code-standard" di commit terbaru
+    status_name: code-standard
+    status_fail_on: none          # none | error | warning. "error" = status merah jika ada error
+                                  # (hati-hati: bisa ikut menahan merge jika "pipeline must succeed" aktif)
+    comment_footer: "Pengecekan standar kode otomatis"
+
+dashboard:
+  enabled: true
+  host: 127.0.0.1                 # 0.0.0.0 agar bisa dibuka dari HP/laptop lain di jaringan kantor
+  port: 8787
+  password: ${DASHBOARD_PASSWORD} # wajib jika host bukan 127.0.0.1
+  public_url: ""                  # mis. http://pc-nova:8787, dipakai sebagai link di status commit
+
+teams:
+  # power_automate = kirim ke grup IDAS via flow Power Automate (tampil sebagai akun Anda)
+  # telegram_copy  = teks dikirim ke Telegram, Anda copy-paste sendiri ke Teams
+  # off            = tidak kirim apa-apa
+  mode: power_automate
+  webhook_url: ${TEAMS_FLOW_URL}
+  # Dipilih acak supaya tidak monoton. Placeholder:
+  # {ref} {title} {jira} {topic} {author_first} {author_name} {source_branch} {target_branch} {url} {project}
+  templates:
+    - "Halo tim, MR {ref} {title} sudah saya merge ke {target_branch}. Thanks {author_first} 🙏"
+    - "Info, {topic} dari {author_first} sudah merged ke {target_branch} ya. Silakan dicek, kabari kalau ada isu."
+    - "Rekan-rekan, MR {ref} ({topic}) sudah saya merge ke {target_branch}. Makasih {author_first}."
+    - "{topic} sudah masuk {target_branch} ya. Thanks {author_first}, mohon dipantau di {target_branch}."
+
+storage:
+  db_path: mr_pilot.db
+  log_file: logs/mr-pilot.log

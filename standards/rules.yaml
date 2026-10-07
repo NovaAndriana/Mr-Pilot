@@ -1,0 +1,117 @@
+# Aturan otomatis (regex) yang dicek pada BARIS YANG DITAMBAHKAN di setiap commit.
+# Pelanggaran -> warning di commit tersebut (file + baris) + dashboard + Telegram.
+#
+#   id        : unik, muncul di komentar & dashboard
+#   stacks    : daftar stack (lihat code_quality.stacks di config) atau ["*"] untuk semua
+#   severity  : error | warning | info
+#   pattern   : regex Python, dicocokkan per baris
+#   message   : pesan untuk developer
+#   paths / exclude_paths : glob opsional
+#   enabled   : false untuk mematikan sementara
+
+rules:
+  # ---------------- umum
+  - id: no-hardcoded-secret
+    stacks: ["*"]
+    severity: error
+    pattern: '(?i)\b(password|passwd|secret|api[_-]?key|access[_-]?token|client[_-]?secret)\b["'']?\s*(:=|=|:)\s*["''][^"''\s]{8,}["'']'
+    message: Secret/password di-hardcode. Pindahkan ke env var / secret manager.
+    exclude_paths: ["*_test.go", "*.test.ts", "*.test.tsx", "*.spec.ts", "*.spec.tsx", "*.md"]
+
+  - id: private-key-committed
+    stacks: ["*"]
+    severity: error
+    pattern: '-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----'
+    message: Private key ikut ter-commit. Hapus dan rotate key-nya.
+
+  - id: todo-without-ticket
+    stacks: ["*"]
+    severity: info
+    pattern: '(//|#|/\*)\s*(TODO|FIXME)(?!\s*\(\s*[A-Z][A-Z0-9]+-\d+\s*\))'
+    message: TODO/FIXME wajib menyebut tiket, mis. TODO(IDAS-123).
+
+  - id: merge-conflict-marker
+    stacks: ["*"]
+    severity: error
+    pattern: '^(<{7}|>{7}|={7})( |$)'
+    message: Sisa marker merge conflict.
+
+  # ---------------- Go
+  - id: go-no-fmt-print
+    stacks: [go]
+    severity: warning
+    pattern: '\b(fmt\.Print(ln|f)?|log\.Print(ln|f)?)\('
+    message: Gunakan logger terstruktur proyek, bukan fmt.Print / log.Print.
+    exclude_paths: ["*_test.go", "cmd/**", "scripts/**"]
+
+  - id: go-ignored-error
+    stacks: [go]
+    severity: warning
+    pattern: '^\s*(_\s*=|[A-Za-z_][\w]*\s*,\s*_\s*:?=)\s*[\w.]+\('
+    message: Error diabaikan (_). Tangani atau beri komentar alasannya.
+    exclude_paths: ["*_test.go"]
+
+  - id: go-panic
+    stacks: [go]
+    severity: warning
+    pattern: '\bpanic\('
+    message: Hindari panic di kode aplikasi, kembalikan error.
+    exclude_paths: ["*_test.go", "cmd/**", "main.go"]
+
+  - id: go-sql-concat
+    stacks: [go]
+    severity: error
+    pattern: '(?i)(\.(Raw|Exec|Query|QueryRow)\(\s*fmt\.Sprintf|"\s*(SELECT|UPDATE|DELETE|INSERT)\b[^"]*"\s*\+)'
+    message: SQL disusun dengan string concat/Sprintf (risiko injection). Gunakan parameter.
+
+  - id: go-getenv-scattered
+    stacks: [go]
+    severity: info
+    pattern: '\bos\.Getenv\('
+    message: Baca konfigurasi sekali di package config, jangan os.Getenv tersebar.
+    exclude_paths: ["*config*/**", "*config*.go", "cmd/**", "*_test.go"]
+
+  # ---------------- React / React Native (TypeScript)
+  - id: ts-no-console
+    stacks: [react, react-native]
+    severity: warning
+    pattern: '\bconsole\.(log|debug|info)\('
+    message: Hapus console.log sebelum merge (pakai logger jika perlu).
+    exclude_paths: ["*.test.*", "*.spec.*"]
+
+  - id: ts-no-any
+    stacks: [react, react-native]
+    severity: warning
+    pattern: '(:\s*any\b|<any>|as\s+any\b|any\[\])'
+    message: Hindari tipe any, gunakan tipe spesifik atau unknown.
+
+  - id: ts-ignore
+    stacks: [react, react-native]
+    severity: warning
+    pattern: '@ts-ignore'
+    message: Jangan pakai @ts-ignore; gunakan @ts-expect-error + alasan.
+
+  - id: react-index-key
+    stacks: [react, react-native]
+    severity: info
+    pattern: 'key=\{\s*(index|idx|i)\s*\}'
+    message: Key list memakai index; gunakan id yang stabil.
+
+  - id: react-dangerous-html
+    stacks: [react]
+    severity: warning
+    pattern: 'dangerouslySetInnerHTML'
+    message: dangerouslySetInnerHTML wajib disanitasi (DOMPurify).
+
+  - id: hardcoded-url
+    stacks: [react, react-native]
+    severity: warning
+    pattern: '["''`]https?://(?!localhost|127\.0\.0\.1|www\.w3\.org|schemas\.)[^"''`\s]+["''`]'
+    message: URL di-hardcode; ambil dari env/config.
+    exclude_paths: ["*.test.*", "*.spec.*", "*.stories.*"]
+
+  - id: rn-asyncstorage-token
+    stacks: [react-native]
+    severity: error
+    pattern: '(?i)AsyncStorage\.setItem\(\s*["''`][^"''`]*(token|password|secret)'
+    message: Token/password disimpan di AsyncStorage; gunakan Keychain/Keystore.

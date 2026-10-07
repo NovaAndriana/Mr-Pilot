@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Masuk · MR Pilot</title>
+<style>
+  :root { --bg:#EDF0F3; --surface:#fff; --ink:#18202A; --muted:#6B7685; --line:#DCE1E7; --accent:#3346C4; --del:#C2363A; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0F1318; --surface:#171C23; --ink:#E7EBF0; --muted:#8691A0; --line:#2A313A; --accent:#8E9BFF; --del:#F0686B; } }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--ink);
+         font:15px/1.5 "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif; padding:16px; }
+  form { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:28px; width:100%; max-width:340px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p { margin:0 0 20px; color:var(--muted); font-size:14px; }
+  label { display:block; font-size:13px; font-weight:600; margin-bottom:6px; }
+  input { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font:inherit; background:transparent; color:inherit; }
+  input:focus-visible, button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  button { margin-top:16px; width:100%; padding:10px; border:0; border-radius:8px; background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  .err { color:var(--del); font-size:13px; margin-top:10px; display:none; }
+</style>
+</head>
+<body>
+  <form method="post" action="/login">
+    <h1>MR Pilot</h1>
+    <p>Masukkan password dashboard dari config.yaml.</p>
+    <label for="pw">Password</label>
+    <input id="pw" name="password" type="password" autocomplete="current-password" required autofocus>
+    <button type="submit">Masuk</button>
+    <div class="err" id="err">Password salah. Cek <code>dashboard.password</code> di config.</div>
+  </form>
+  <script>if (location.search.includes("e=1")) document.getElementById("err").style.display = "block";</script>
+</body>
+</html>

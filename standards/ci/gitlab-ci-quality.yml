@@ -1,0 +1,35 @@
+# Contoh job CI untuk tooling di standar (gofmt, go vet, golangci-lint, ESLint, tsc).
+# Salin ke .gitlab-ci.yml repo terkait dan sesuaikan path/image.
+# MR Pilot membaca hasil pipeline ini (pipeline merah = merge ditahan).
+
+stages: [quality, test]
+
+go-quality:
+  stage: quality
+  image: golangci/golangci-lint:v1.61
+  rules:
+    - changes: ["**/*.go", "go.mod"]
+  script:
+    - test -z "$(gofmt -l . | grep -v vendor/)" || (gofmt -l . && exit 1)
+    - go vet ./...
+    - golangci-lint run --timeout 5m
+
+go-test:
+  stage: test
+  image: golang:1.23
+  rules:
+    - changes: ["**/*.go", "go.mod"]
+  script:
+    - go test -race -cover ./...
+
+web-quality:
+  stage: quality
+  image: node:20
+  rules:
+    - changes: ["web/**/*"]
+  script:
+    - cd web && npm ci
+    - npx prettier --check .
+    - npx eslint . --max-warnings 0
+    - npx tsc --noEmit
+    - npm test -- --watch=false

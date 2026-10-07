@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MR Pilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: light;
+  --bg:#EDF0F3; --surface:#FFFFFF; --surface-2:#F6F8FA; --ink:#18202A; --ink-2:#4A5563; --muted:#6F7A89;
+  --line:#DCE1E7; --line-2:#C8CFD8; --accent:#3346C4; --accent-soft:#E6E9FB;
+  --add:#1A7F45; --add-soft:#E3F4EA; --del:#C2363A; --del-soft:#FBE7E8; --warn:#9A5B00; --warn-soft:#FFF1D6;
+  --s1:#2a78d6; --s2:#eb6834; --crit:#d03b3b; --warnfill:#fab219; --infofill:#B5BDC7;
+  --grid:#E4E8EC; --axis:#C3CAD3;
+  --sans:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --bg:#0F1318; --surface:#171C23; --surface-2:#1E242C; --ink:#E7EBF0; --ink-2:#B3BCC8; --muted:#8691A0;
+    --line:#2A313A; --line-2:#38414C; --accent:#8E9BFF; --accent-soft:#252B4D;
+    --add:#4CC27E; --add-soft:#15301F; --del:#F0686B; --del-soft:#3A1B1D; --warn:#F2B13C; --warn-soft:#3A2C12;
+    --s1:#3987e5; --s2:#d95926; --infofill:#5A6472; --grid:#242A32; --axis:#38414C;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg:#0F1318; --surface:#171C23; --surface-2:#1E242C; --ink:#E7EBF0; --ink-2:#B3BCC8; --muted:#8691A0;
+  --line:#2A313A; --line-2:#38414C; --accent:#8E9BFF; --accent-soft:#252B4D;
+  --add:#4CC27E; --add-soft:#15301F; --del:#F0686B; --del-soft:#3A1B1D; --warn:#F2B13C; --warn-soft:#3A2C12;
+  --s1:#3987e5; --s2:#d95926; --infofill:#5A6472; --grid:#242A32; --axis:#38414C;
+}
+* { box-sizing:border-box; }
+html, body { margin:0; background:var(--bg); color:var(--ink); }
+body { font:14px/1.5 var(--sans); -webkit-font-smoothing:antialiased; }
+a { color:inherit; }
+button { font:inherit; color:inherit; }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
+.mono { font-family:var(--mono); font-size:.92em; }
+.muted { color:var(--muted); }
+.wrap { max-width:1280px; margin:0 auto; padding:0 20px; }
+
+/* ---------- top bar */
+header { position:sticky; top:0; z-index:5; background:color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter:blur(8px); border-bottom:1px solid var(--line); }
+.bar { display:flex; align-items:center; gap:20px; height:56px; }
+.brand { font-weight:700; font-size:16px; letter-spacing:-.01em; display:flex; align-items:center; gap:10px; }
+.brand svg { width:22px; height:22px; }
+nav { display:flex; gap:2px; overflow-x:auto; }
+nav button { background:none; border:0; padding:8px 12px; border-radius:8px; color:var(--ink-2); cursor:pointer; white-space:nowrap; font-weight:500; }
+nav button[aria-selected="true"] { background:var(--surface); color:var(--ink); box-shadow:inset 0 0 0 1px var(--line); }
+.status { margin-left:auto; display:flex; align-items:center; gap:14px; font-size:13px; color:var(--ink-2); white-space:nowrap; }
+.live { display:inline-flex; align-items:center; gap:6px; }
+.live i { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+.live.on i { background:var(--add); box-shadow:0 0 0 0 color-mix(in srgb, var(--add) 60%, transparent); animation:pulse 2.4s infinite; }
+.live.off i { background:var(--del); }
+@keyframes pulse { 0%{box-shadow:0 0 0 0 color-mix(in srgb, var(--add) 55%, transparent)} 70%{box-shadow:0 0 0 7px transparent} 100%{box-shadow:0 0 0 0 transparent} }
+@media (prefers-reduced-motion: reduce) { .live.on i { animation:none; } .flash { animation:none !important; } }
+.icon-btn { background:none; border:1px solid var(--line); border-radius:8px; width:32px; height:32px; cursor:pointer; display:grid; place-items:center; }
+
+main { padding:32px 0 60px; }
+aside.panel { position:sticky; top:72px; }
+@media (max-width: 1020px) { aside.panel { position:static; } }
+.view[hidden] { display:none; }
+
+/* ---------- queue hero */
+.hero-line { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin:0 0 4px; }
+.hero-num { font-size:56px; font-weight:700; letter-spacing:-.03em; line-height:1; }
+.hero-text { font-size:22px; font-weight:600; letter-spacing:-.01em; }
+.hero-sub { color:var(--ink-2); margin:6px 0 22px; max-width:70ch; }
+.layout { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:24px; align-items:start; }
+@media (max-width: 1020px) { .layout { grid-template-columns:1fr; } }
+
+.panel { background:var(--surface); border:1px solid var(--line); border-radius:12px; }
+.panel-h { display:flex; align-items:baseline; justify-content:space-between; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); }
+.panel-h h2 { font-size:15px; margin:0; font-weight:600; }
+.panel-b { padding:16px 18px; }
+
+.queue { list-style:none; margin:0; padding:0; }
+.q { display:grid; grid-template-columns:28px minmax(0,1fr) auto; grid-template-areas:"v t s" "v m s"; gap:4px 14px; padding:14px 18px; border-top:1px solid var(--line); cursor:pointer; }
+.q:first-child { border-top:0; }
+.q:hover { background:var(--surface-2); }
+.q .v { grid-area:v; width:28px; height:28px; border-radius:8px; display:grid; place-items:center; font-size:14px; font-weight:700; }
+.v-APPROVE { background:var(--add-soft); color:var(--add); }
+.v-NEEDS_ATTENTION { background:var(--warn-soft); color:var(--warn); }
+.v-REQUEST_CHANGES { background:var(--del-soft); color:var(--del); }
+.v-UNKNOWN, .v-none { background:var(--surface-2); color:var(--muted); }
+.q-title { grid-area:t; font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.q-title .ref { font-family:var(--mono); font-weight:500; color:var(--accent); margin-right:8px; }
+.q-meta { grid-area:m; color:var(--ink-2); font-size:13px; display:flex; gap:12px; flex-wrap:wrap; min-width:0; }
+.q-meta .branch { font-family:var(--mono); font-size:12px; color:var(--muted); }
+.q-side { grid-area:s; display:flex; flex-direction:column; align-items:flex-end; gap:8px; min-width:150px; }
+.chips { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+.chip { display:inline-flex; align-items:center; gap:4px; padding:1px 8px; border-radius:999px; font-size:12px; font-weight:500; border:1px solid var(--line); white-space:nowrap; }
+.chip.err { background:var(--del-soft); color:var(--del); border-color:transparent; }
+.chip.wrn { background:var(--warn-soft); color:var(--warn); border-color:transparent; }
+.chip.ok { background:var(--add-soft); color:var(--add); border-color:transparent; }
+.age { width:150px; }
+.age-track { height:6px; border-radius:3px; background:var(--surface-2); box-shadow:inset 0 0 0 1px var(--line); overflow:hidden; }
+.age-fill { height:100%; border-radius:3px; background:var(--accent); }
+.age-fill.warn { background:var(--warnfill); }
+.age-fill.late { background:var(--crit); }
+.age-label { font-size:12px; color:var(--ink-2); text-align:right; margin-top:3px; }
+@media (max-width: 640px) {
+  .q { grid-template-columns:28px minmax(0,1fr); grid-template-areas:"v t" "v m" "v s"; }
+  .q-title { white-space:normal; }
+  .q-side { align-items:stretch; min-width:0; margin-top:4px; }
+  .age { width:100%; }
+  .age-label { text-align:left; }
+  .chips { justify-content:flex-start; }
+  .status .hide-sm { display:none; }
+  .bar { flex-wrap:wrap; height:auto; padding-top:10px; gap:8px 16px; }
+  nav { order:3; width:100%; padding-bottom:8px; }
+  .hero-num { font-size:44px; }
+  .hero-text { font-size:19px; }
+}
+.empty { padding:36px 18px; text-align:center; color:var(--ink-2); }
+.empty strong { display:block; color:var(--ink); font-size:16px; margin-bottom:4px; }
+
+/* ---------- feed */
+.feed { list-style:none; margin:0; padding:0; max-height:560px; overflow:auto; }
+.feed li { display:grid; grid-template-columns:10px 1fr; gap:10px; padding:10px 18px; border-top:1px solid var(--line); }
+.feed li:first-child { border-top:0; }
+.feed .dot { width:8px; height:8px; border-radius:50%; margin-top:7px; background:var(--muted); }
+.lv-success .dot { background:var(--add); } .lv-error .dot { background:var(--del); } .lv-warning .dot { background:var(--warnfill); }
+.feed .t { font-weight:500; overflow-wrap:anywhere; }
+.feed .d { color:var(--ink-2); font-size:13px; overflow-wrap:anywhere; }
+.feed .w { color:var(--muted); font-size:12px; }
+.flash { animation:flash 1.6s ease-out; }
+@keyframes flash { from { background:var(--accent-soft); } to { background:transparent; } }
+
+/* ---------- stats */
+.tiles { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:12px; margin:24px 0; }
+@media (max-width: 860px) { .tiles { grid-template-columns:repeat(2, minmax(0,1fr)); } }
+.tile { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+.tile .l { color:var(--ink-2); font-size:13px; }
+.tile .n { font-size:28px; font-weight:600; letter-spacing:-.02em; margin-top:2px; }
+.tile .s { font-size:12px; color:var(--muted); }
+.tile .s.up { color:var(--add); } .tile .s.down { color:var(--del); }
+.grid2 { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr); gap:24px; align-items:start; }
+@media (max-width: 1020px) { .grid2 { grid-template-columns:1fr; } }
+
+/* ---------- charts */
+.chart { position:relative; }
+.chart svg { display:block; width:100%; height:auto; overflow:visible; }
+.chart text { font-family:var(--sans); }
+.legend { display:flex; gap:16px; flex-wrap:wrap; font-size:13px; color:var(--ink-2); margin-bottom:8px; }
+.legend span { display:inline-flex; align-items:center; gap:6px; }
+.legend i { width:12px; height:3px; border-radius:2px; display:inline-block; }
+.legend i.sq { height:10px; width:10px; border-radius:3px; }
+.tip { position:absolute; pointer-events:none; background:var(--surface); border:1px solid var(--line-2); border-radius:8px; padding:8px 10px;
+  font-size:12px; box-shadow:0 6px 20px rgba(0,0,0,.12); white-space:nowrap; z-index:3; display:none; }
+.tip b { display:block; margin-bottom:2px; }
+.tip .r { display:flex; align-items:center; gap:6px; color:var(--ink-2); }
+.tip .r i { width:8px; height:8px; border-radius:2px; }
+details.tbl { margin-top:10px; font-size:13px; }
+details.tbl summary { cursor:pointer; color:var(--ink-2); }
+
+/* ---------- tables */
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th { text-align:left; font-weight:600; color:var(--ink-2); padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+td { padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+td.mono { word-break:break-all; }
+td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+tr:last-child td { border-bottom:0; }
+.tscroll { overflow-x:auto; }
+.sev { display:inline-flex; align-items:center; gap:5px; font-weight:500; white-space:nowrap; }
+.sev.error { color:var(--del); } .sev.warning { color:var(--warn); } .sev.info { color:var(--muted); }
+
+/* ---------- filters */
+.filters { display:flex; gap:8px; align-items:center; margin:0 0 18px; flex-wrap:wrap; }
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--surface); }
+.seg button { border:0; background:none; padding:6px 12px; cursor:pointer; color:var(--ink-2); }
+.seg button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+
+/* ---------- standards */
+.std { display:grid; grid-template-columns:260px minmax(0,1fr); gap:24px; align-items:start; }
+@media (max-width: 900px) { .std { grid-template-columns:1fr; } }
+.files { list-style:none; margin:0; padding:6px; }
+.files button { width:100%; text-align:left; background:none; border:0; padding:8px 10px; border-radius:8px; cursor:pointer; }
+.files button[aria-current="true"] { background:var(--accent-soft); }
+.files .fn { font-family:var(--mono); font-size:13px; display:block; }
+.files .fr { font-size:12px; color:var(--muted); }
+textarea { width:100%; min-height:440px; resize:vertical; border:1px solid var(--line); border-radius:8px; padding:12px; background:var(--surface-2);
+  color:var(--ink); font:13px/1.55 var(--mono); tab-size:2; }
+textarea.small { min-height:130px; }
+input[type=text] { width:100%; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--surface-2); color:var(--ink); font:13px var(--mono); }
+.btn { border:0; border-radius:8px; padding:8px 14px; background:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
+.btn.ghost { background:none; color:var(--ink); border:1px solid var(--line); }
+.btn:disabled { opacity:.5; cursor:default; }
+.row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.msg { font-size:13px; }
+.msg.ok { color:var(--add); } .msg.bad { color:var(--del); }
+.pill { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+.pill.on { background:var(--add-soft); color:var(--add); } .pill.off { background:var(--surface-2); color:var(--muted); }
+.kv { display:grid; grid-template-columns:max-content 1fr; gap:6px 14px; font-size:13px; }
+.kv dt { color:var(--ink-2); } .kv dd { margin:0; }
+.note { background:var(--surface-2); border-radius:8px; padding:12px 14px; color:var(--ink-2); font-size:13px; }
+
+/* ---------- drawer */
+.scrim { position:fixed; inset:0; background:rgba(10,14,20,.35); z-index:9; }
+.drawer { position:fixed; top:0; right:0; bottom:0; width:min(620px, 100%); background:var(--surface); z-index:10; overflow:auto;
+  border-left:1px solid var(--line); box-shadow:-12px 0 40px rgba(0,0,0,.15); }
+.drawer[hidden], .scrim[hidden] { display:none; }
+.drawer-h { position:sticky; top:0; background:var(--surface); padding:18px 22px; border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:flex-start; }
+.drawer-h h3 { margin:0; font-size:17px; line-height:1.35; }
+.drawer-b { padding:18px 22px 40px; }
+.drawer-b h4 { margin:22px 0 8px; font-size:14px; }
+.drawer-b ul { margin:0; padding-left:18px; }
+.drawer-b li { margin:3px 0; }
+.finding { border-left:3px solid var(--line-2); padding:2px 0 2px 10px; margin:8px 0; }
+.finding.blocker { border-color:var(--crit); } .finding.major { border-color:var(--s2); } .finding.minor { border-color:var(--warnfill); }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="2.5" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="18" r="2.5" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="12" r="2.5" stroke="var(--accent)" stroke-width="2"/><path d="M6 8.5v7M8.3 7.2c4 .8 6.2 2.2 7.4 3.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      MR Pilot
+    </div>
+    <nav role="tablist" aria-label="Halaman">
+      <button role="tab" data-view="queue" aria-selected="true">Antrian</button>
+      <button role="tab" data-view="quality" aria-selected="false">Code quality</button>
+      <button role="tab" data-view="standards" aria-selected="false">Standar</button>
+      <button role="tab" data-view="activity" aria-selected="false">Aktivitas</button>
+    </nav>
+    <div class="status">
+      <span class="live" id="live"><i></i><span id="live-t">Menghubungkan</span></span>
+      <span class="hide-sm" id="poll"></span>
+      <button class="icon-btn" id="theme" title="Ganti tema" aria-label="Ganti tema terang/gelap">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- ===================== ANTRIAN -->
+  <section class="view" id="v-queue">
+    <div class="hero-line"><span class="hero-num" id="q-num">–</span><span class="hero-text" id="q-text">MR menunggu keputusan Anda</span></div>
+    <p class="hero-sub" id="q-sub">Merge dan tolak tetap lewat tombol di Telegram. Halaman ini untuk melihat gambaran dan detailnya.</p>
+    <div class="layout">
+      <div>
+        <div class="panel"><ul class="queue" id="queue"></ul></div>
+        <div class="tiles" id="tiles"></div>
+        <div class="grid2">
+          <div class="panel">
+            <div class="panel-h"><h2>MR masuk dan di-merge, 14 hari</h2></div>
+            <div class="panel-b"><div class="chart" id="c-flow"></div></div>
+          </div>
+          <div class="panel">
+            <div class="panel-h"><h2>Baru selesai</h2></div>
+            <div class="tscroll"><table id="recent"></table></div>
+          </div>
+        </div>
+      </div>
+      <aside class="panel">
+        <div class="panel-h"><h2>Aktivitas langsung</h2><span class="muted" style="font-size:12px" id="feed-n"></span></div>
+        <ul class="feed" id="feed"></ul>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ===================== QUALITY -->
+  <section class="view" id="v-quality" hidden>
+    <div class="filters">
+      <span class="muted">Periode</span>
+      <div class="seg" id="q-range">
+        <button data-d="7" aria-pressed="false">7 hari</button>
+        <button data-d="30" aria-pressed="true">30 hari</button>
+        <button data-d="90" aria-pressed="false">90 hari</button>
+      </div>
+    </div>
+    <div id="quality-body"></div>
+  </section>
+
+  <!-- ===================== STANDAR -->
+  <section class="view" id="v-standards" hidden>
+    <div id="std-status" style="margin-bottom:18px"></div>
+    <div class="std">
+      <div class="panel"><ul class="files" id="files"></ul></div>
+      <div>
+        <div class="panel">
+          <div class="panel-h"><h2 id="ed-name">Pilih file</h2><span class="muted" id="ed-role"></span></div>
+          <div class="panel-b">
+            <textarea id="editor" spellcheck="false" aria-label="Isi standar"></textarea>
+            <div class="row" style="margin-top:10px">
+              <button class="btn" id="save" disabled>Simpan standar</button>
+              <button class="btn ghost" id="revert" disabled>Batalkan perubahan</button>
+              <span class="msg" id="save-msg"></span>
+            </div>
+            <ul class="msg bad" id="save-err" style="margin:8px 0 0;padding-left:18px"></ul>
+          </div>
+        </div>
+        <div class="panel" style="margin-top:24px">
+          <div class="panel-h"><h2>Uji aturan otomatis</h2><span class="muted">tempel potongan kode untuk melihat aturan mana yang kena</span></div>
+          <div class="panel-b">
+            <label class="muted" for="t-path" style="font-size:13px">Path file (menentukan stack)</label>
+            <input type="text" id="t-path" value="internal/workflow/usecase.go">
+            <textarea class="small" id="t-code" style="margin-top:10px" spellcheck="false">func Get(id string) {
+	data, _ := repo.Find(id)
+	fmt.Println(data)
+	// TODO cek lagi
+}</textarea>
+            <div class="row" style="margin-top:10px"><button class="btn ghost" id="t-run">Jalankan uji</button><span class="msg" id="t-stack"></span></div>
+            <div id="t-out" style="margin-top:10px"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== AKTIVITAS -->
+  <section class="view" id="v-activity" hidden>
+    <div class="filters"><span class="muted">Tampilkan</span><div class="seg" id="a-filter"></div></div>
+    <div class="panel"><ul class="feed" id="feed-all" style="max-height:none"></ul></div>
+  </section>
+</main>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden role="dialog" aria-modal="true" aria-labelledby="d-title">
+  <div class="drawer-h">
+    <div style="flex:1;min-width:0"><div class="mono muted" id="d-ref"></div><h3 id="d-title"></h3></div>
+    <button class="icon-btn" id="d-close" aria-label="Tutup detail">✕</button>
+  </div>
+  <div class="drawer-b" id="d-body"></div>
+</aside>
+
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const api = async (path, opts = {}) => {
+  const r = await fetch(path, {...opts, headers: {"X-MRPilot": "1", "Content-Type": "application/json", ...(opts.headers || {})}});
+  if (r.status === 401) { location.href = "/login"; throw new Error("login"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || r.statusText); e.data = j; throw e; }
+  return j;
+};
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+
+const VERDICT = { APPROVE: ["✓", "Approve"], NEEDS_ATTENTION: ["!", "Perlu perhatian"], REQUEST_CHANGES: ["✕", "Request changes"], UNKNOWN: ["?", "Belum direview"] };
+const STATUS = { notified: "Menunggu keputusan", waiting_bot: "Menunggu bot review", error: "Gagal diproses", merging: "Sedang merge",
+                 merged: "Merged", rejected: "Ditolak", closed: "Ditutup" };
+const PIPE = { success: ["ok", "Pipeline lulus"], failed: ["err", "Pipeline gagal"], running: ["", "Pipeline berjalan"], pending: ["", "Pipeline antre"], none: ["", "Tanpa pipeline"] };
+const SEV = { error: "Error", warning: "Warning", info: "Info" };
+const SEVICON = { error: "✕", warning: "!", info: "i" };
+
+function ago(ts) {
+  if (!ts) return "–";
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 60) return "baru saja";
+  if (s < 3600) return Math.floor(s / 60) + " mnt lalu";
+  if (s < 86400) return Math.floor(s / 3600) + " jam lalu";
+  return Math.floor(s / 86400) + " hari lalu";
+}
+function dur(sec) {
+  if (sec == null) return "–";
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  if (h >= 48) return Math.floor(h / 24) + " hari";
+  if (h >= 1) return h + " j " + m + " m";
+  return Math.max(1, m) + " mnt";
+}
+const clock = ts => new Date(ts * 1000).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+const shortDate = d => new Date(d + "T00:00:00").toLocaleDateString("id-ID", { day: "numeric", month: "short" });
+const fmt = n => n == null ? "–" : Number(n).toLocaleString("id-ID");
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+/* ================================================================ theme */
+(function () {
+  const saved = store.get("mrp-theme");
+  if (saved) document.documentElement.dataset.theme = saved;
+  $("#theme").onclick = () => {
+    const dark = document.documentElement.dataset.theme
+      ? document.documentElement.dataset.theme === "dark"
+      : matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = dark ? "light" : "dark";
+    store.set("mrp-theme", document.documentElement.dataset.theme);
+    refresh();
+  };
+})();
+
+/* ================================================================ tabs */
+let view = "queue";
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => show(b.dataset.view));
+function show(v) {
+  view = v;
+  document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.view === v)));
+  document.querySelectorAll(".view").forEach(s => s.hidden = s.id !== "v-" + v);
+  history.replaceState(null, "", "#" + v);
+  refresh();
+}
+
+/* ================================================================ charts (SVG) */
+function tooltip(host) {
+  let t = host.querySelector(".tip");
+  if (!t) { t = document.createElement("div"); t.className = "tip"; host.appendChild(t); }
+  return {
+    show(html, x, y) {
+      t.innerHTML = html; t.style.display = "block";
+      const w = t.offsetWidth, hw = host.clientWidth;
+      t.style.left = Math.min(Math.max(0, x + 12), hw - w) + "px";
+      t.style.top = Math.max(0, y - t.offsetHeight - 10) + "px";
+    },
+    hide() { t.style.display = "none"; }
+  };
+}
+const niceMax = v => { if (v <= 4) return 4; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p; return v; };
+
+function lineChart(host, rows, series, opts = {}) {
+  const W = host.clientWidth || 600, H = 220, P = { l: 34, r: 56, t: 10, b: 26 };
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const max = niceMax(Math.max(1, ...rows.flatMap(r => series.map(s => r[s.key]))));
+  const x = i => P.l + (rows.length < 2 ? iw / 2 : i * iw / (rows.length - 1));
+  const y = v => P.t + ih - v / max * ih;
+  let g = "";
+  for (let k = 0; k <= 4; k++) {
+    const v = max * k / 4, yy = y(v);
+    g += `<line x1="${P.l}" x2="${W - P.r}" y1="${yy}" y2="${yy}" stroke="${k ? css("--grid") : css("--axis")}" />`;
+    g += `<text x="${P.l - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="${css("--muted")}" style="font-variant-numeric:tabular-nums">${fmt(v)}</text>`;
+  }
+  const step = Math.max(1, Math.ceil(rows.length / Math.max(2, Math.floor(iw / 64))));
+  rows.forEach((r, i) => { if ((i % step === 0 && rows.length - 1 - i >= step * 0.6) || i === rows.length - 1) g += `<text x="${x(i)}" y="${H - 6}" text-anchor="middle" font-size="11" fill="${css("--muted")}">${esc(shortDate(r.date))}</text>`; });
+  series.forEach(s => {
+    const col = css(s.color);
+    const d = rows.map((r, i) => `${i ? "L" : "M"}${x(i)},${y(r[s.key])}`).join("");
+    g += `<path d="${d}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const last = rows[rows.length - 1];
+    g += `<circle cx="${x(rows.length - 1)}" cy="${y(last[s.key])}" r="4" fill="${col}" stroke="${css("--surface")}" stroke-width="2"/>`;
+    g += `<text x="${x(rows.length - 1) + 8}" y="${y(last[s.key]) + 4}" font-size="11" fill="${css("--ink-2")}">${fmt(last[s.key])} ${esc(s.short || "")}</text>`;
+  });
+  g += `<line id="xh" y1="${P.t}" y2="${P.t + ih}" stroke="${css("--line-2")}" visibility="hidden"/>`;
+  host.innerHTML = `<div class="legend">${series.map(s => `<span><i style="background:${css(s.color)}"></i>${esc(s.label)}</span>`).join("")}</div>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.label || "")}">${g}<rect x="${P.l}" y="${P.t}" width="${iw}" height="${ih}" fill="transparent" class="hit"/></svg>` + tableTwin(rows, series);
+  const svg = host.querySelector("svg"), tip = tooltip(host), xh = svg.querySelector("#xh");
+  svg.querySelector(".hit").addEventListener("mousemove", ev => {
+    const rect = svg.getBoundingClientRect(), sx = (ev.clientX - rect.left) * W / rect.width;
+    const i = Math.max(0, Math.min(rows.length - 1, Math.round((sx - P.l) / (iw / Math.max(1, rows.length - 1)))));
+    xh.setAttribute("x1", x(i)); xh.setAttribute("x2", x(i)); xh.setAttribute("visibility", "visible");
+    tip.show(`<b>${esc(shortDate(rows[i].date))}</b>` + series.map(s => `<div class="r"><i style="background:${css(s.color)}"></i>${esc(s.label)}: ${fmt(rows[i][s.key])}</div>`).join(""),
+      x(i) * rect.width / W, y(Math.max(...series.map(s => rows[i][s.key]))) * rect.height / H + 30);
+  });
+  svg.querySelector(".hit").addEventListener("mouseleave", () => { tip.hide(); xh.setAttribute("visibility", "hidden"); });
+}
+
+function stackedColumns(host, rows, series, opts = {}) {
+  const W = host.clientWidth || 600, H = 230, P = { l: 34, r: 8, t: 10, b: 26 };
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const totals = rows.map(r => series.reduce((a, s) => a + r[s.key], 0));
+  const max = niceMax(Math.max(1, ...totals));
+  const band = iw / rows.length, bw = Math.min(24, band * 0.7);
+  const y = v => P.t + ih - v / max * ih;
+  let g = "";
+  for (let k = 0; k <= 4; k++) {
+    const v = max * k / 4, yy = y(v);
+    g += `<line x1="${P.l}" x2="${W - P.r}" y1="${yy}" y2="${yy}" stroke="${k ? css("--grid") : css("--axis")}" />`;
+    g += `<text x="${P.l - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="${css("--muted")}" style="font-variant-numeric:tabular-nums">${fmt(v)}</text>`;
+  }
+  const step = Math.max(1, Math.ceil(rows.length / Math.max(2, Math.floor(iw / 64))));
+  rows.forEach((r, i) => {
+    const cx = P.l + band * i + band / 2;
+    let acc = 0;
+    const visible = series.filter(s => r[s.key] > 0);
+    visible.forEach((s, j) => {
+      const h = r[s.key] / max * ih, top = y(acc + r[s.key]);
+      const isTop = j === visible.length - 1;
+      const hh = Math.max(0, h - (j > 0 ? 2 : 0));
+      if (isTop && hh > 4) {
+        const x0 = cx - bw / 2, rr = 4;
+        g += `<path d="M${x0},${top + hh} V${top + rr} Q${x0},${top} ${x0 + rr},${top} H${x0 + bw - rr} Q${x0 + bw},${top} ${x0 + bw},${top + rr} V${top + hh} Z" fill="${css(s.color)}"/>`;
+      } else {
+        g += `<rect x="${cx - bw / 2}" y="${top}" width="${bw}" height="${hh}" fill="${css(s.color)}"/>`;
+      }
+      acc += r[s.key];
+    });
+    if ((i % step === 0 && rows.length - 1 - i >= step * 0.6) || i === rows.length - 1) g += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="11" fill="${css("--muted")}">${esc(shortDate(r.date))}</text>`;
+    g += `<rect x="${P.l + band * i}" y="${P.t}" width="${band}" height="${ih}" fill="transparent" data-i="${i}" class="hit"/>`;
+  });
+  host.innerHTML = `<div class="legend">${series.map(s => `<span><i class="sq" style="background:${css(s.color)}"></i>${esc(s.label)}</span>`).join("")}</div>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.label || "")}">${g}</svg>` + tableTwin(rows, series);
+  const svg = host.querySelector("svg"), tip = tooltip(host);
+  svg.querySelectorAll(".hit").forEach(h => {
+    h.addEventListener("mouseenter", () => {
+      const i = +h.dataset.i, rect = svg.getBoundingClientRect();
+      tip.show(`<b>${esc(shortDate(rows[i].date))}</b>` + series.map(s => `<div class="r"><i style="background:${css(s.color)}"></i>${esc(s.label)}: ${fmt(rows[i][s.key])}</div>`).join("")
+        + `<div class="r">Total: ${fmt(totals[i])}</div>`, (P.l + band * i + band / 2) * rect.width / W, y(totals[i]) * rect.height / H + 30);
+    });
+    h.addEventListener("mouseleave", () => tip.hide());
+  });
+}
+
+function hbars(host, items, opts = {}) {
+  if (!items.length) { host.innerHTML = `<div class="empty">Belum ada data.</div>`; return; }
+  const max = Math.max(...items.map(i => i.value));
+  host.innerHTML = `<div style="display:grid;gap:10px">` + items.map(it => `
+    <div title="${esc(it.title || it.label)}">
+      <div style="display:flex;justify-content:space-between;gap:10px;font-size:13px">
+        <span class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.label)}</span>
+        <span style="font-variant-numeric:tabular-nums;color:var(--ink-2)">${fmt(it.value)}${it.extra ? " · " + esc(it.extra) : ""}</span>
+      </div>
+      <div style="height:8px;border-radius:0 4px 4px 0;background:var(--s1);width:${Math.max(2, it.value / max * 100)}%;margin-top:4px"></div>
+    </div>`).join("") + `</div>`;
+  void opts;
+}
+
+function tableTwin(rows, series) {
+  return `<details class="tbl"><summary>Lihat sebagai tabel</summary><div class="tscroll"><table><thead><tr><th>Tanggal</th>${series.map(s => `<th class="num">${esc(s.label)}</th>`).join("")}</tr></thead><tbody>`
+    + rows.map(r => `<tr><td>${esc(shortDate(r.date))}</td>${series.map(s => `<td class="num">${fmt(r[s.key])}</td>`).join("")}</tr>`).join("") + `</tbody></table></div></details>`;
+}
+
+/* ================================================================ queue */
+let summary = null;
+async function loadSummary() {
+  summary = await api("/api/summary");
+  const s = summary, k = s.kpi;
+  $("#q-num").textContent = k.waiting;
+  $("#q-text").textContent = k.waiting === 0 ? "MR menunggu keputusan Anda. Antrian bersih." : "MR menunggu keputusan Anda";
+  $("#q-sub").innerHTML = k.waiting
+    ? (k.waiting_attention ? `<strong>${k.waiting_attention}</strong> di antaranya butuh perhatian: verdict bermasalah, error standar, atau pipeline gagal. ` : "Semua yang menunggu terlihat aman. ")
+      + "Merge dan tolak tetap lewat tombol di Telegram."
+    : "Tidak ada MR yang menunggu. MR baru akan muncul di sini otomatis.";
+  renderQueue(s.active);
+  renderTiles(k);
+  renderHealth(s.health);
+  lineChart($("#c-flow"), s.flow, [
+    { key: "opened", label: "MR masuk", short: "masuk", color: "--s1" },
+    { key: "merged", label: "Di-merge", short: "merged", color: "--s2" }], { label: "MR masuk dan di-merge per hari" });
+  $("#recent").innerHTML = s.recent.length ? `<thead><tr><th>MR</th><th>Hasil</th><th>Kapan</th></tr></thead><tbody>` + s.recent.slice(0, 6).map(m => `
+    <tr><td><a href="${esc(m.url)}" target="_blank" rel="noopener"><span class="mono">!${m.iid}</span></a> ${esc(m.title)}<div class="muted">${esc(m.author || "")}</div></td>
+    <td>${m.status === "merged" ? '<span class="chip ok">Merged</span>' : m.status === "rejected" ? '<span class="chip err">Ditolak</span>' : '<span class="chip">Ditutup</span>'}</td>
+    <td class="muted" style="white-space:nowrap">${esc(ago(m.decided_ts || m.updated_ts))}</td></tr>`).join("") + `</tbody>`
+    : `<tbody><tr><td class="empty">Belum ada MR yang selesai.</td></tr></tbody>`;
+  if (!feedLoaded) { renderFeed(s.events); feedLoaded = true; }
+}
+
+function ageClass(h) { return h >= 24 ? "late" : h >= 8 ? "warn" : ""; }
+function renderQueue(list) {
+  const el = $("#queue");
+  if (!list.length) {
+    el.innerHTML = `<li class="empty"><strong>Antrian kosong</strong>MR yang reviewer-nya Anda akan muncul di sini dalam ${Math.round((summary.health.poll_interval || 120) / 60)} menit setelah dibuat.</li>`;
+    return;
+  }
+  const now = Date.now() / 1000;
+  el.innerHTML = list.map(m => {
+    const v = m.verdict || "UNKNOWN", [vi, vl] = VERDICT[v] || VERDICT.UNKNOWN;
+    const ageS = m.created_ts ? now - m.created_ts : null, ageH = (ageS || 0) / 3600;
+    const pct = Math.min(100, ageH / 24 * 100);
+    const vc = m.violations, pipe = PIPE[m.pipeline] || ["", "Pipeline " + (m.pipeline || "-")];
+    const chips = [];
+    if (vc.error) chips.push(`<span class="chip err">✕ ${vc.error} error</span>`);
+    if (vc.warning) chips.push(`<span class="chip wrn">! ${vc.warning} warning</span>`);
+    if (!vc.error && !vc.warning && summary.health.quality_enabled && m.status === "notified") chips.push(`<span class="chip ok">✓ Standar</span>`);
+    if (m.pipeline === "failed") chips.push(`<span class="chip err">Pipeline gagal</span>`);
+    if (m.status !== "notified") chips.push(`<span class="chip">${esc(STATUS[m.status] || m.status)}</span>`);
+    return `<li class="q" tabindex="0" data-key="${esc(m.key)}" aria-label="Detail MR !${m.iid}">
+      <span class="v v-${esc(v)}" title="${esc(vl)}" aria-label="Verdict ${esc(vl)}">${vi}</span>
+      <div class="q-title"><span class="ref">!${m.iid}</span>${esc(m.title)}</div>
+      <div class="q-side">
+        <div class="chips">${chips.join("")}</div>
+        <div class="age" title="Umur MR sejak dibuat; penuh = 24 jam">
+          <div class="age-track"><div class="age-fill ${ageClass(ageH)}" style="width:${pct}%"></div></div>
+          <div class="age-label">menunggu ${esc(dur(ageS))}</div>
+        </div>
+      </div>
+      <div class="q-meta"><span>${esc(m.author || "-")}</span><span class="branch">${esc(m.source_branch || "")} → ${esc(m.target_branch || "")}</span><span>${esc(pipe[1])}</span><span>${esc(vl)}</span></div>
+    </li>`;
+  }).join("");
+  el.querySelectorAll(".q").forEach(li => {
+    li.onclick = () => openDetail(li.dataset.key);
+    li.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(li.dataset.key); } };
+  });
+}
+
+function renderTiles(k) {
+  const delta = k.merged_7d - k.merged_prev_7d;
+  $("#tiles").innerHTML = [
+    ["Di-merge 7 hari", fmt(k.merged_7d), delta === 0 ? "sama dengan 7 hari sebelumnya" : `${delta > 0 ? "+" : ""}${delta} dibanding 7 hari sebelumnya`, delta > 0 ? "up" : ""],
+    ["Rata-rata waktu ke keputusan", k.avg_decision_hours == null ? "–" : k.avg_decision_hours + " jam", "dari MR dibuat sampai merge/tolak, 30 hari", ""],
+    ["Pelanggaran standar terbuka", fmt(k.open_errors + k.open_warnings), `${k.open_errors} error, ${k.open_warnings} warning di MR aktif`, k.open_errors ? "down" : ""],
+    ["Pipeline gagal", fmt(k.failing_pipelines), "di MR yang menunggu", k.failing_pipelines ? "down" : ""],
+  ].map(([l, n, s, c]) => `<div class="tile"><div class="l">${esc(l)}</div><div class="n">${esc(n)}</div><div class="s ${c}">${esc(s)}</div></div>`).join("");
+}
+
+function renderHealth(h) {
+  const ok = h.last_poll_ok;
+  $("#poll").textContent = ok ? "GitLab dicek " + ago(ok) : (h.last_poll_error ? "GitLab gagal dicek" : "GitLab belum dicek");
+  $("#poll").title = h.last_poll_error || "";
+}
+
+/* ================================================================ detail drawer */
+async function openDetail(key) {
+  const d = await api("/api/mr?key=" + encodeURIComponent(key));
+  const rv = d.review || {};
+  $("#d-ref").textContent = `${d.project || ""} !${d.iid} · ${d.sha}`;
+  $("#d-title").textContent = d.title;
+  const [, vl] = VERDICT[d.verdict] || VERDICT.UNKNOWN;
+  let h = `<dl class="kv"><dt>Pembuat</dt><dd>${esc(d.author || "-")} <span class="muted">@${esc(d.author_username || "")}</span></dd>
+    <dt>Branch</dt><dd class="mono">${esc(d.source_branch)} → ${esc(d.target_branch)}</dd>
+    <dt>Status</dt><dd>${esc(STATUS[d.status] || d.status)}</dd><dt>Verdict</dt><dd>${esc(vl)}</dd>
+    <dt>Pipeline</dt><dd>${esc((PIPE[d.pipeline] || ["", d.pipeline])[1])}</dd></dl>
+    <p style="margin-top:14px"><a class="btn" style="text-decoration:none;display:inline-block" href="${esc(d.url)}" target="_blank" rel="noopener">Buka di GitLab</a></p>`;
+  if (rv.solves) h += `<h4>Masalah yang diselesaikan</h4><p style="margin:0">${esc(rv.solves)}</p>`;
+  if ((rv.changes || []).length) h += `<h4>Perubahan</h4><ul>${rv.changes.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`;
+  if ((rv.good_points || []).length) h += `<h4>Yang sudah bagus</h4><ul>${rv.good_points.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`;
+  if (rv.summary) h += `<h4>Penilaian review</h4><p style="margin:0">${esc(rv.summary)}</p>`;
+  if ((rv.breaking_changes || []).length) h += `<h4>Breaking change</h4><ul>${rv.breaking_changes.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`;
+  if ((rv.findings || []).length) h += `<h4>Temuan review</h4>` + rv.findings.map(f => `<div class="finding ${esc(f.severity)}"><strong>${esc(f.title)}</strong>${f.file ? ` <span class="mono muted">${esc(f.file)}</span>` : ""}${f.detail ? `<div class="muted">${esc(f.detail)}</div>` : ""}</div>`).join("");
+  const vs = d.violations_list || [];
+  h += `<h4>Standar kode</h4>` + (vs.length ? `<div class="tscroll"><table><thead><tr><th>Level</th><th>Aturan</th><th>Lokasi</th></tr></thead><tbody>` +
+    vs.map(v => `<tr><td><span class="sev ${esc(v.severity)}">${SEVICON[v.severity]} ${esc(SEV[v.severity])}</span></td><td><span class="mono">${esc(v.rule)}</span>${v.source === "ai" ? ' <span class="muted">(AI)</span>' : ""}<div class="muted">${esc(v.message)}</div></td><td class="mono">${esc(v.path ? v.path + ":" + (v.line || "") : "-")}</td></tr>`).join("") + `</tbody></table></div>`
+    : `<p class="muted" style="margin:0">${summary && summary.health.quality_enabled ? "Tidak ada pelanggaran standar." : "Code quality belum diaktifkan."}</p>`);
+  if ((d.events || []).length) h += `<h4>Riwayat</h4><ul class="feed" style="max-height:none;margin:0 -22px">${d.events.map(feedItem).join("")}</ul>`;
+  $("#d-body").innerHTML = h;
+  $("#drawer").hidden = false; $("#scrim").hidden = false; $("#d-close").focus();
+}
+function closeDetail() { $("#drawer").hidden = true; $("#scrim").hidden = true; }
+$("#d-close").onclick = closeDetail; $("#scrim").onclick = closeDetail;
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeDetail(); });
+
+/* ================================================================ feed */
+let feedLoaded = false, feedEvents = [];
+const EVLABEL = { all: "Semua", mr_new: "MR baru", review: "Review", quality: "Standar kode", merged: "Merge", rejected: "Tolak", error: "Error", standards: "Perubahan standar", system: "Sistem" };
+function feedItem(ev, flash) {
+  return `<li class="lv-${esc(ev.level || "info")} ${flash ? "flash" : ""}"><span class="dot"></span><div>
+    <div class="t">${esc(ev.title)}</div>${ev.detail ? `<div class="d">${esc(ev.detail)}</div>` : ""}<div class="w">${esc(clock(ev.ts))}</div></div></li>`;
+}
+function renderFeed(evs) {
+  feedEvents = evs.slice().reverse();
+  $("#feed").innerHTML = feedEvents.length ? feedEvents.slice(0, 40).map(e => feedItem(e)).join("")
+    : `<li class="empty" style="display:block"><strong>Belum ada aktivitas</strong>Kejadian muncul di sini secara langsung.</li>`;
+  $("#feed-n").textContent = "";
+}
+function pushEvent(ev) {
+  feedEvents.unshift(ev);
+  const el = $("#feed");
+  if (el.querySelector(".empty")) el.innerHTML = "";
+  el.insertAdjacentHTML("afterbegin", feedItem(ev, true));
+  while (el.children.length > 40) el.lastElementChild.remove();
+}
+
+let aFilter = "all";
+$("#a-filter").innerHTML = Object.entries(EVLABEL).map(([k, v]) => `<button data-t="${k}" aria-pressed="${k === "all"}">${esc(v)}</button>`).join("");
+$("#a-filter").onclick = e => { const b = e.target.closest("button"); if (!b) return; aFilter = b.dataset.t;
+  $("#a-filter").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b))); loadActivity(); };
+async function loadActivity() {
+  const evs = (await api("/api/events?after=0&limit=500")).reverse();
+  const list = evs.filter(e => aFilter === "all" || e.type === aFilter || (aFilter === "mr_new" && e.type === "mr_updated"));
+  $("#feed-all").innerHTML = list.length ? list.map(e => feedItem(e)).join("") : `<li class="empty" style="display:block">Tidak ada aktivitas untuk filter ini.</li>`;
+}
+
+/* ================================================================ quality */
+let qDays = 30;
+$("#q-range").onclick = e => { const b = e.target.closest("button"); if (!b) return; qDays = +b.dataset.d;
+  $("#q-range").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b))); loadQuality(); };
+async function loadQuality() {
+  const q = await api("/api/quality?days=" + qDays), body = $("#quality-body");
+  if (!q.enabled && !q.kpi.total) {
+    body.innerHTML = `<div class="panel empty"><strong>Code quality belum aktif</strong>Set <span class="mono">code_quality.enabled: true</span> di config.yaml, lalu jalankan ulang MR Pilot.<br>Standarnya bisa ditulis dan diuji dulu di tab Standar.</div>`;
+    return;
+  }
+  const k = q.kpi, cleanPct = k.commits_checked ? Math.round(k.commits_clean / k.commits_checked * 100) : null;
+  body.innerHTML = `
+    <div class="tiles" style="margin-top:0">
+      <div class="tile"><div class="l">Pelanggaran ${q.days} hari</div><div class="n">${fmt(k.total)}</div><div class="s">${fmt(k.error)} error, ${fmt(k.warning)} warning</div></div>
+      <div class="tile"><div class="l">Commit dicek</div><div class="n">${fmt(k.commits_checked)}</div><div class="s">${fmt(k.commits_with_issues)} commit ada pelanggaran</div></div>
+      <div class="tile"><div class="l">Commit bersih</div><div class="n">${cleanPct == null ? "–" : cleanPct + "%"}</div><div class="s">tanpa pelanggaran aturan otomatis</div></div>
+      <div class="tile"><div class="l">Aturan paling sering</div><div class="n mono" style="font-size:17px;margin-top:8px;overflow:hidden;text-overflow:ellipsis">${esc((q.top_rules[0] || {}).name || "–")}</div><div class="s">${q.top_rules[0] ? fmt(q.top_rules[0].total) + " kali" : "belum ada"}</div></div>
+    </div>
+    <div class="grid2">
+      <div class="panel"><div class="panel-h"><h2>Pelanggaran per hari</h2></div><div class="panel-b"><div class="chart" id="c-daily"></div></div></div>
+      <div class="panel"><div class="panel-h"><h2>Aturan paling sering dilanggar</h2></div><div class="panel-b" id="c-rules"></div></div>
+    </div>
+    <div class="panel" style="margin-top:24px"><div class="panel-h"><h2>Pelanggaran terbuka di MR aktif</h2><span class="muted">${fmt(q.open.length)}</span></div>
+      <div class="tscroll" id="t-open"></div></div>
+    <div class="grid2" style="margin-top:24px">
+      <div class="panel"><div class="panel-h"><h2>Per developer</h2><span class="muted">untuk bahan coaching 1:1, bukan ranking</span></div><div class="tscroll" id="t-author"></div></div>
+      <div class="panel"><div class="panel-h"><h2>File paling sering kena</h2></div><div class="tscroll" id="t-files"></div></div>
+    </div>`;
+  stackedColumns($("#c-daily"), q.daily, [
+    { key: "error", label: "Error", color: "--crit" }, { key: "warning", label: "Warning", color: "--warnfill" }, { key: "info", label: "Info", color: "--infofill" }],
+    { label: "Pelanggaran standar per hari menurut level" });
+  hbars($("#c-rules"), q.top_rules.map(r => ({ label: r.name, value: r.total, extra: r.error ? r.error + " error" : "" })));
+  const sevTable = (rows, head) => rows.length ? `<table><thead><tr><th>${head}</th><th class="num">Error</th><th class="num">Warning</th><th class="num">Info</th><th class="num">Total</th></tr></thead><tbody>` +
+    rows.map(r => `<tr><td class="${head === "File" ? "mono" : ""}">${esc(r.name)}</td><td class="num">${fmt(r.error)}</td><td class="num">${fmt(r.warning)}</td><td class="num">${fmt(r.info)}</td><td class="num"><strong>${fmt(r.total)}</strong></td></tr>`).join("") + `</tbody></table>`
+    : `<div class="empty">Belum ada data.</div>`;
+  $("#t-author").innerHTML = sevTable(q.by_author, "Developer");
+  $("#t-files").innerHTML = sevTable(q.top_files, "File");
+  $("#t-open").innerHTML = q.open.length ? `<table><thead><tr><th>Level</th><th>MR</th><th>Aturan</th><th>Lokasi</th></tr></thead><tbody>` + q.open.map(v => `
+    <tr><td><span class="sev ${esc(v.severity)}">${SEVICON[v.severity]} ${esc(SEV[v.severity])}</span></td>
+    <td style="white-space:nowrap"><a class="mono" href="${esc(v.url)}" target="_blank" rel="noopener">${esc(v.mr)}</a></td>
+    <td><span class="mono">${esc(v.rule)}</span>${v.source === "ai" ? ' <span class="muted">(AI)</span>' : ""}<div class="muted">${esc(v.message)}</div></td>
+    <td class="mono">${esc(v.path ? v.path + ":" + (v.line || "") : "-")}</td></tr>`).join("") + `</tbody></table>`
+    : `<div class="empty"><strong>Tidak ada pelanggaran terbuka</strong>Semua MR aktif sesuai standar.</div>`;
+}
+
+/* ================================================================ standards */
+let stdData = null, current = null, original = "";
+async function loadStandards(keepSel) {
+  stdData = await api("/api/standards");
+  const s = stdData;
+  $("#std-status").innerHTML = `<div class="panel panel-b"><div class="row" style="justify-content:space-between">
+      <div class="row"><strong>Code quality</strong><span class="pill ${s.enabled ? "on" : "off"}">${s.enabled ? "Aktif" : "Nonaktif"}</span>
+      <span class="muted">${s.rules_count} aturan otomatis${s.ai_check ? ", cek AI terhadap dokumen standar aktif" : ""}</span></div>
+      <span class="muted">Aktif/nonaktif diatur di config.yaml (<span class="mono">code_quality.enabled</span>)</span></div>
+    ${s.rule_errors.length ? `<ul class="msg bad" style="margin:10px 0 0;padding-left:18px">${s.rule_errors.map(e => `<li>${esc(e)}</li>`).join("")}</ul>` : ""}
+    <div class="note" style="margin-top:12px">Dokumen <span class="mono">.md</span> dipakai AI sebagai acuan standar. <span class="mono">rules.yaml</span> berisi aturan regex yang dicek di setiap commit; pelanggarannya diposting sebagai warning di commit tersebut.
+    Stack: ${s.stacks.map(t => `<strong>${esc(t.name)}</strong> <span class="mono">${esc((t.paths || []).join(", "))}</span>`).join("; ")}.</div></div>`;
+  $("#files").innerHTML = s.files.map(f => `<li><button data-name="${esc(f.name)}" aria-current="${current === f.name}"><span class="fn">${esc(f.name)}</span><span class="fr">${esc(f.role)}</span></button></li>`).join("")
+    || `<li class="empty">Folder standar kosong.</li>`;
+  $("#files").querySelectorAll("button").forEach(b => b.onclick = () => selectFile(b.dataset.name));
+  if (!keepSel || !current) selectFile(current || (s.files.find(f => f.name === "rules.yaml") || s.files[0] || {}).name);
+}
+function selectFile(name) {
+  if (!name) return;
+  if (current && $("#editor").value !== original && !confirm("Perubahan di " + current + " belum disimpan. Buang?")) return;
+  const f = stdData.files.find(x => x.name === name);
+  current = name; original = f ? f.content : "";
+  $("#editor").value = original; $("#ed-name").textContent = name; $("#ed-role").textContent = f ? f.role : "";
+  $("#files").querySelectorAll("button").forEach(b => b.setAttribute("aria-current", String(b.dataset.name === name)));
+  dirty(); $("#save-msg").textContent = ""; $("#save-err").innerHTML = "";
+}
+function dirty() { const d = $("#editor").value !== original; $("#save").disabled = !d; $("#revert").disabled = !d; }
+$("#editor").addEventListener("input", dirty);
+$("#editor").addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); if (!$("#save").disabled) save(); } });
+$("#revert").onclick = () => { $("#editor").value = original; dirty(); };
+$("#save").onclick = save;
+async function save() {
+  $("#save").disabled = true; $("#save-msg").textContent = "Menyimpan…"; $("#save-msg").className = "msg"; $("#save-err").innerHTML = "";
+  try {
+    await api("/api/standards/" + encodeURIComponent(current), { method: "PUT", body: JSON.stringify({ content: $("#editor").value }) });
+    original = $("#editor").value;
+    $("#save-msg").textContent = "Tersimpan. Dipakai mulai pengecekan berikutnya."; $("#save-msg").className = "msg ok";
+    await loadStandards(true);
+  } catch (e) {
+    $("#save-msg").textContent = e.message; $("#save-msg").className = "msg bad";
+    $("#save-err").innerHTML = ((e.data || {}).details || []).map(d => `<li>${esc(d)}</li>`).join("");
+  }
+  dirty();
+}
+$("#t-run").onclick = async () => {
+  const r = await api("/api/standards/test", { method: "POST", body: JSON.stringify({ path: $("#t-path").value, code: $("#t-code").value }) });
+  $("#t-stack").textContent = "Stack terdeteksi: " + (r.stack_name || "tidak ada (hanya aturan umum)");
+  $("#t-out").innerHTML = r.violations.length ? `<table><thead><tr><th>Baris</th><th>Level</th><th>Aturan</th></tr></thead><tbody>` + r.violations.map(v => `
+    <tr><td class="num">${v.line}</td><td><span class="sev ${esc(v.severity)}">${SEVICON[v.severity]} ${esc(SEV[v.severity])}</span></td><td><span class="mono">${esc(v.rule)}</span><div class="muted">${esc(v.message)}</div></td></tr>`).join("") + `</tbody></table>`
+    : `<p class="msg ok">Tidak ada aturan yang kena.</p>`;
+};
+
+/* ================================================================ realtime */
+let timer = null;
+function refresh() {
+  clearTimeout(timer);
+  timer = setTimeout(async () => {
+    try {
+      if (view === "queue") await loadSummary();
+      else if (view === "quality") await loadQuality();
+      else if (view === "standards") { if (!stdData) await loadStandards(); }
+      else if (view === "activity") await loadActivity();
+      if (view !== "queue" && !summary) loadSummary();
+    } catch (e) { if (e.message !== "login") console.error(e); }
+  }, 150);
+}
+function connect() {
+  const es = new EventSource("/api/stream");
+  es.addEventListener("hello", () => { $("#live").className = "live on"; $("#live-t").textContent = "Live"; });
+  es.addEventListener("activity", m => {
+    const ev = JSON.parse(m.data);
+    pushEvent(ev);
+    if (ev.type === "standards" && view === "standards") return;
+    refresh();
+  });
+  es.onerror = () => { $("#live").className = "live off"; $("#live-t").textContent = "Terputus, menyambung ulang"; };
+}
+window.addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(refresh, 250); });
+setInterval(() => { if (view === "queue") refresh(); }, 60000);
+
+const start = (location.hash || "#queue").slice(1);
+show(["queue", "quality", "standards", "activity"].includes(start) ? start : "queue");
+connect();
+</script>
+</body>
+</html>
