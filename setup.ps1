@@ -40,11 +40,23 @@ function Get-Kv($key, $file = ".env") {
   if ($line) { return ($line -split "=", 2)[1].Trim('"') } else { return "" }
 }
 function Set-Kv($key, $value) {
-  $lines = @(); if (Test-Path .env) { $lines = @(Get-Content .env) }
+  # Selalu pakai List: pipeline PowerShell mengubah array 1 item jadi string, dan += lalu menyambung teks.
+  $lines = [System.Collections.Generic.List[string]]::new()
+  if (Test-Path .env) { foreach ($l in [IO.File]::ReadAllLines((Join-Path $PSScriptRoot ".env"))) { $lines.Add($l) } }
   $found = $false
-  $lines = $lines | ForEach-Object { if ($_ -match "^$key=") { $found = $true; "$key=$value" } else { $_ } }
-  if (-not $found) { $lines += "$key=$value" }
-  [IO.File]::WriteAllLines((Join-Path $PSScriptRoot ".env"), [string[]]$lines)
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -match "^$key=") { $lines[$i] = "$key=$value"; $found = $true }
+  }
+  if (-not $found) { $lines.Add("$key=$value") }
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [IO.File]::WriteAllLines((Join-Path $PSScriptRoot ".env"), $lines.ToArray(), $utf8NoBom)
+}
+function Repair-EnvFile {
+  # .env dari versi lama setup.ps1 bisa berisi semua nilai dalam satu baris (MRP_BIND=127.0.0.1MRP_PORT=...).
+  if ((Test-Path .env) -and ((Get-Content .env -Raw) -match 'MRP_BIND=[^\r\n]*MRP_PORT=')) {
+    Say "File .env rusak (dari setup versi lama), dibuat ulang."
+    Move-Item .env ".env.rusak.bak" -Force
+  }
 }
 
 function Ensure-Docker {
@@ -100,9 +112,10 @@ function Summary {
 switch ($Command) {
   "install" {
     Ensure-Docker
+    Repair-EnvFile
     Say "Konfigurasi Docker"
     $flags = $Server -or $Local -or $Port -or $WithClaudeCode -or $WithOllama
-    if (-not (Test-Path .env) -or $flags) {
+    if (-not (Test-Path .env) -or $flags -or -not (Get-Kv "MRP_PORT")) {
       $bind = if ($Server) { "0.0.0.0" } elseif ($Local) { "127.0.0.1" } elseif (AskYN "Dashboard bisa dibuka dari komputer lain di jaringan (mode server)?" $false) { "0.0.0.0" } else { "127.0.0.1" }
       $claude = if ($WithClaudeCode) { $true } else { AskYN "Pasang CLI Claude Code di container (pakai langganan Claude)?" $false }
       $ollama = if ($WithOllama) { $true } else { AskYN "Jalankan AI lokal Ollama di Docker juga?" $false }
