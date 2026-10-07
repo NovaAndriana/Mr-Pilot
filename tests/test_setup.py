@@ -162,3 +162,83 @@ def test_github_secrets_are_sealed(monkeypatch):
         assert public.SealedBox(sk).decrypt(enc) == b"10.0.0.5"
     finally:
         srv.shutdown()
+
+
+def test_env_parsing_edge_cases(monkeypatch):
+    from mr_pilot.config import parse_env_line
+    assert parse_env_line("DASHBOARD_PASSWORD=abc123  # password saya") == ("DASHBOARD_PASSWORD", "abc123")
+    assert parse_env_line('DASHBOARD_PASSWORD="ab #12"') == ("DASHBOARD_PASSWORD", "ab #12")
+    assert parse_env_line("export X='a b'") == ("X", "a b")
+    assert parse_env_line("﻿GITLAB_URL=https://x") == ("GITLAB_URL", "https://x")
+    assert parse_env_line("P=abc#def") == ("P", "abc#def")  # # tanpa spasi = bagian password
+    tmp = tempfile.mkdtemp()
+    p = os.path.join(tmp, ".env")
+    sw.write_env(p, {"A": 'he said "hi"', "B": "x y"})
+    assert sw.read_env(p) == {"A": 'he said "hi"', "B": "x y"}
+
+
+def test_dashboard_password_never_coerced(monkeypatch):
+    tmp = tempfile.mkdtemp()
+    sw.bootstrap_data_dir(tmp)
+    for pw in ("007007", "yes", "12345678", "true"):
+        with open(os.path.join(tmp, ".env"), "w", encoding="utf-8-sig") as f:  # BOM seperti Notepad lama
+            f.write(f"DASHBOARD_PASSWORD={pw}   # komentar\nTELEGRAM_CHAT_ID=007\n")
+        monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
+        monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+        cfg = load_config(os.path.join(tmp, "config.yaml"))
+        assert cfg["dashboard"]["password"] == pw, pw
+    # empty env var (e.g. from docker-compose) must not hide the .env value
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "")
+    assert load_config(os.path.join(tmp, "config.yaml"))["dashboard"]["password"] == "true"
+
+
+def test_login_with_leading_zero_password(monkeypatch):
+    import urllib.error
+    import urllib.request
+    from mr_pilot.dashboard import Dashboard, _Handler
+    from mr_pilot.store import Store
+    tmp = tempfile.mkdtemp()
+    sw.bootstrap_data_dir(tmp)
+    with open(os.path.join(tmp, ".env"), "w") as f:
+        f.write("DASHBOARD_PASSWORD=0123456789\nDASHBOARD_HOST=0.0.0.0\n")
+    for k in ("DASHBOARD_PASSWORD", "DASHBOARD_HOST"):
+        monkeypatch.delenv(k, raising=False)
+    cfg = load_config(os.path.join(tmp, "config.yaml"))
+    d = Dashboard(cfg, Store(":memory:"))
+
+    class H(_Handler):
+        app = d
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+    try:
+        for pw, ok in (("0123456789", True), ("123456789", False)):
+            req = urllib.request.Request(base + "/login", data=f"password={pw}".encode(), method="POST")
+            try:
+                urllib.request.build_opener(NoRedirect).open(req, timeout=5)
+            except urllib.error.HTTPError as e:
+                assert (e.headers["Location"] == "/") is ok, pw
+    finally:
+        srv.shutdown()
+
+
+def test_password_command(capsys):
+    from mr_pilot.__main__ import main
+    tmp = tempfile.mkdtemp()
+    sw.bootstrap_data_dir(tmp)
+    cfgp = os.path.join(tmp, "config.yaml")
+    try:
+        main(["password", "--config", cfgp, "--set", "rahasia-baru-123"])
+    except SystemExit as e:
+        assert e.code == 0
+    assert sw.read_env(os.path.join(tmp, ".env"))["DASHBOARD_PASSWORD"] == "rahasia-baru-123"
+    os.environ.pop("DASHBOARD_PASSWORD", None)
+    try:
+        main(["password", "--config", cfgp])
+    except SystemExit:
+        pass
+    assert "rahasia-baru-123" in capsys.readouterr().out

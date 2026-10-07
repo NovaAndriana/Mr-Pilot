@@ -51,6 +51,7 @@ setup.bat config      ./setup.sh config      jalankan ulang wizard
 setup.bat update      ./setup.sh update      git pull + build + restart
 setup.bat stop|start  ./setup.sh stop|start
 setup.bat demo        ./setup.sh demo        dashboard dengan data contoh (password: demo)
+setup.bat password    ./setup.sh password    lihat password dashboard yang aktif (-Reset / --reset = buat baru)
 setup.bat ci          ./setup.sh ci          pasang CI/CD + deploy otomatis (bagian 5)
 ```
 Opsi install: `--with-claude-code` (CLI Claude Code ikut dipasang di image), `--with-ollama[=model]` (AI lokal di Docker), `--port 8787`, `--non-interactive` (semua jawaban dari env, untuk otomasi).
@@ -215,6 +216,7 @@ Deploy di server menjalankan `deploy/remote-deploy.sh`: login registry dengan to
 | Teams `gagal: HTTP 4xx` | URL flow salah/kedaluwarsa, atau flow nonaktif. Cek *Run history* di Power Automate |
 | Merge gagal 405/406 | MR belum mergeable (approval wajib, conflict, discussion belum resolved) |
 | Warning tidak muncul di baris commit | Baris tersebut bukan bagian diff commit itu. Ringkasan tetap ada di MR |
+| Login dashboard selalu "password salah" | Password diambil dari `DASHBOARD_PASSWORD` di **`data/.env`** (bukan `.env` di folder utama) dan dibaca **saat MR Pilot dinyalakan**. Setelah mengubah, jalankan `setup.bat restart`. Cek password aktif dengan `setup.bat password`. Hapus juga password lama yang tersimpan otomatis di browser. |
 | `setup.bat`: "Docker belum berjalan" | Buka Docker Desktop, tunggu status *running*, ulangi |
 | Linux: `permission denied ... docker.sock` | Logout/login (grup docker baru aktif), atau jalankan lagi; skrip memakai sudo otomatis |
 | Claude Code: "belum login" | Jalankan `claude setup-token` di PC yang sudah login, tempel token di dashboard > AI |

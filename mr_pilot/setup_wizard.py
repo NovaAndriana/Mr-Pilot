@@ -33,22 +33,15 @@ def h(title):
 
 # ------------------------------------------------------------------ .env I/O
 def read_env(path):
-    data = {}
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    data[k.strip()] = v.strip().strip('"').strip("'")
-    return data
+    from .config import read_env_file
+    return read_env_file(path)
 
 
 def write_env(path, updates):
     """Update keys in place, keep other lines/comments, append new keys."""
     lines = []
     if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             lines = f.read().splitlines()
     done = set()
     for i, line in enumerate(lines):
@@ -75,7 +68,9 @@ def write_env(path, updates):
 
 def _q(v):
     v = "" if v is None else str(v)
-    return f'"{v}"' if re.search(r"\s|#", v) else v
+    if not re.search(r"[\s#\"']", v):
+        return v
+    return f"'{v}'" if '"' in v and "'" not in v else f'"{v}"'
 
 
 # ------------------------------------------------------------ data folder

@@ -5,15 +5,17 @@
 #   ./setup.sh --server        sama, dashboard bisa dibuka dari jaringan (bind 0.0.0.0)
 #   ./setup.sh ci              pasang CI/CD (GitHub/GitLab) + deploy otomatis ke server
 #   ./setup.sh update | start | stop | restart | status | logs | doctor | config | shell | demo
+#   ./setup.sh password [--reset]   lihat / buat ulang password dashboard
 #
 # Opsi: --server  --port N  --with-claude-code  --with-ollama[=model]  --non-interactive  -y
 set -euo pipefail
 cd "$(dirname "$0")"
 
-CMD=install; BIND=""; PORT=""; CLAUDE=""; OLLAMA=""; OLLAMA_MODEL=""; NONINT=0; YES=0
+CMD=install; PW_RESET=0; BIND=""; PORT=""; CLAUDE=""; OLLAMA=""; OLLAMA_MODEL=""; NONINT=0; YES=0
 for arg in "$@"; do
   case "$arg" in
-    install|update|ci|start|stop|restart|status|logs|doctor|config|shell|demo) CMD=$arg ;;
+    install|update|ci|start|stop|restart|status|logs|doctor|config|shell|demo|password) CMD=$arg ;;
+    --reset) PW_RESET=1 ;;
     --server) BIND=0.0.0.0 ;;
     --local) BIND=127.0.0.1 ;;
     --port=*) PORT=${arg#*=} ;;
@@ -144,6 +146,10 @@ case "$CMD" in
   status) ensure_docker; dc ps ;;
   logs) ensure_docker; dc logs -f --tail 100 mr-pilot ;;
   doctor) ensure_docker; dc run --rm -T mr-pilot doctor ;;
+  password)
+    ensure_docker
+    if [ "$PW_RESET" = 1 ]; then dc run --rm -T mr-pilot password --reset && dc restart mr-pilot && wait_healthy || true
+    else dc run --rm -T mr-pilot password; fi ;;
   config) ensure_docker; dc run --rm mr-pilot setup ;;
   shell) ensure_docker; dc exec mr-pilot bash ;;
   demo) ensure_docker; dc build >/dev/null; echo "Dashboard demo: http://127.0.0.1:${PORT:-8788}  (password: demo, Ctrl+C untuk berhenti)"

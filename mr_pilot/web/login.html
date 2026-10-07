@@ -23,11 +23,13 @@
 <body>
   <form method="post" action="/login">
     <h1>MR Pilot</h1>
-    <p>Masukkan password dashboard dari config.yaml.</p>
+    <p>Masukkan password dashboard (DASHBOARD_PASSWORD).</p>
     <label for="pw">Password</label>
     <input id="pw" name="password" type="password" autocomplete="current-password" required autofocus>
     <button type="submit">Masuk</button>
-    <div class="err" id="err">Password salah. Cek <code>dashboard.password</code> di config.</div>
+    <div class="err" id="err">Password salah. Password diambil dari <code>DASHBOARD_PASSWORD</code> di <code>data/.env</code>
+      saat MR Pilot dinyalakan. Setelah mengubahnya, jalankan <code>setup.bat restart</code>.
+      Lihat password aktif: <code>setup.bat password</code>.</div>
   </form>
   <script>if (location.search.includes("e=1")) document.getElementById("err").style.display = "block";</script>
 </body>

@@ -5,12 +5,13 @@ MR Pilot - instal & kelola dengan Docker Desktop (Windows).
   setup.bat -Server          dashboard bisa dibuka dari jaringan (bind 0.0.0.0)
   setup.bat ci               pasang CI/CD (GitHub/GitLab) + deploy otomatis ke server
   setup.bat update | start | stop | restart | status | logs | doctor | config | shell | demo
+  setup.bat password [-Reset]   lihat / buat ulang password dashboard
 
 Opsi: -Server  -Port 8787  -WithClaudeCode  -WithOllama  -OllamaModel qwen2.5-coder:14b  -Yes
 #>
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("install", "update", "ci", "start", "stop", "restart", "status", "logs", "doctor", "config", "shell", "demo")]
+  [ValidateSet("install", "update", "ci", "start", "stop", "restart", "status", "logs", "doctor", "config", "shell", "demo", "password")]
   [string]$Command = "install",
   [switch]$Server,
   [switch]$Local,
@@ -18,7 +19,8 @@ param(
   [switch]$WithClaudeCode,
   [switch]$WithOllama,
   [string]$OllamaModel = "",
-  [switch]$Yes
+  [switch]$Yes,
+  [switch]$Reset
 )
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
@@ -146,6 +148,11 @@ switch ($Command) {
   "status" { Ensure-Docker; DC ps }
   "logs" { Ensure-Docker; docker compose logs -f --tail 100 mr-pilot }
   "doctor" { Ensure-Docker; docker compose run --rm -T mr-pilot doctor }
+  "password" {
+    Ensure-Docker
+    if ($Reset) { DC run --rm -T mr-pilot password --reset; DC restart mr-pilot; Wait-Healthy }
+    else { docker compose run --rm -T mr-pilot password }
+  }
   "config" { Ensure-Docker; DC run --rm mr-pilot setup }
   "shell" { Ensure-Docker; docker compose exec mr-pilot bash }
   "demo" {

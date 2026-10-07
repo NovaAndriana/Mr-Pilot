@@ -22,16 +22,44 @@ def setup_logging(path):
     root.handlers = [fh, sh]
 
 
+def cmd_password(cfg, data_dir, a):
+    """Tampilkan / ganti password dashboard. Sumbernya DASHBOARD_PASSWORD di <data>/.env."""
+    import secrets
+    from .setup_wizard import read_env, write_env
+    env_path = os.path.join(data_dir, ".env")
+    if a.reset or a.set_password:
+        new = a.set_password or secrets.token_urlsafe(12)
+        if len(new) < 8:
+            print("Password minimal 8 karakter.")
+            return 2
+        write_env(env_path, {"DASHBOARD_PASSWORD": new})
+        print(f"Password dashboard baru : {new}")
+        print("Disimpan di             :", env_path)
+        print("Restart MR Pilot agar dipakai (setup.bat restart / ./setup.sh restart).")
+        return 0
+    in_file = read_env(env_path).get("DASHBOARD_PASSWORD", "")
+    active = str(cfg["dashboard"].get("password") or "")
+    print(f"File .env             : {env_path}")
+    print(f"Password dashboard    : {active or '(kosong)'}")
+    if in_file and in_file != active:
+        print("PERINGATAN: nilai di .env berbeda dengan yang terbaca. Ada variabel environment "
+              "DASHBOARD_PASSWORD lain yang menimpanya (cek docker-compose.yml / env sistem).")
+    print("Kalau baru diubah, restart MR Pilot dulu (setup.bat restart / ./setup.sh restart).")
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="mr_pilot", description="Auto review + merge MR GitLab via Telegram")
     p.add_argument("command", nargs="?", default="run",
-                   choices=["run", "setup", "doctor", "setup-ci", "demo", "dashboard"],
+                   choices=["run", "setup", "doctor", "setup-ci", "demo", "dashboard", "password"],
                    help="run (default) | setup: wizard konfigurasi | doctor: cek koneksi | "
                         "setup-ci: pasang CI/CD + deploy | demo: dashboard data contoh")
     p.add_argument("--config", default=os.environ.get("MRP_CONFIG", "config.yaml"))
     p.add_argument("--non-interactive", action="store_true", help="setup/setup-ci: ambil jawaban dari env")
     p.add_argument("--src", default=os.environ.get("MRP_SRC", "."), help="setup-ci: folder repo (default .)")
     p.add_argument("--no-ai-test", action="store_true", help="doctor: jangan panggil AI")
+    p.add_argument("--reset", action="store_true", help="password: buat password dashboard baru")
+    p.add_argument("--set", dest="set_password", metavar="PASSWORD", help="password: pakai password ini")
     p.add_argument("--once", action="store_true", help="cek GitLab sekali lalu keluar")
     p.add_argument("--dry-run", action="store_true", help="tidak kirim apa pun, hanya cetak")
     p.add_argument("--get-chat-id", action="store_true", help="tampilkan chat id Telegram Anda")
@@ -88,6 +116,9 @@ def main(argv=None):
         import tempfile
         cfg["storage"]["log_file"] = os.path.join(tempfile.gettempdir(), "mr-pilot-demo.log")
     setup_logging(cfg["storage"]["log_file"])
+
+    if a.command == "password":
+        sys.exit(cmd_password(cfg, data_dir, a))
 
     if a.command == "doctor":
         from .setup_wizard import run_doctor

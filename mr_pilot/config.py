@@ -124,21 +124,26 @@ def _coerce(s):
         return True
     if low in ("false", "no", "off"):
         return False
-    if re.fullmatch(r"-?\d+", s.strip()):
+    if re.fullmatch(r"-?(0|[1-9]\d*)", s.strip()):  # "007" tetap string
         return int(s)
     return s
 
 
-def _expand(v):
+# Nilai rahasia/teks bebas: jangan pernah diubah jadi bool/int (password "007007" atau "yes" tetap utuh)
+NO_COERCE = {("dashboard", "password"), ("gitlab", "token"), ("telegram", "bot_token"), ("teams", "webhook_url"),
+             ("gitlab", "url"), ("dashboard", "public_url")}
+
+
+def _expand(v, coerce=True, path=()):
     if isinstance(v, str):
         whole = _ENV.fullmatch(v.strip())
         out = _ENV.sub(lambda m: os.environ.get(m.group(1)) or (m.group(2) or ""), v)
         # "${X}" sendirian -> boleh jadi bool/int (mis. enabled: ${CODE_QUALITY_ENABLED:-true})
-        return _coerce(out) if whole and out != "" else out
+        return _coerce(out) if coerce and whole and out != "" and tuple(path[-2:]) not in NO_COERCE else out
     if isinstance(v, dict):
-        return {k: _expand(x) for k, x in v.items()}
+        return {k: _expand(x, coerce, path + (k,)) for k, x in v.items()}
     if isinstance(v, list):
-        return [_expand(x) for x in v]
+        return [_expand(x, coerce, path) for x in v]
     return v
 
 
@@ -152,16 +157,43 @@ def _merge(base, over):
     return out
 
 
+def parse_env_line(line):
+    """KEY=VALUE -> (key, value) or None. Mendukung `export`, kutip, dan komentar di akhir baris
+    (`PASSWORD=abc123  # catatan` -> abc123). Di dalam kutip, # dianggap bagian dari nilai."""
+    line = line.strip().lstrip("\ufeff")
+    if not line or line.startswith("#") or "=" not in line:
+        return None
+    k, v = line.split("=", 1)
+    k = k.strip()
+    if k.startswith("export "):
+        k = k[7:].strip()
+    v = v.strip()
+    if v[:1] in ('"', "'"):
+        q = v[0]
+        end = v.find(q, 1)
+        v = v[1:end] if end > 0 else v[1:]
+    else:
+        v = re.split(r"\s+#", v, maxsplit=1)[0].strip()
+    return k, v
+
+
+def read_env_file(path):
+    data = {}
+    if os.path.exists(path):
+        with open(path, encoding="utf-8-sig") as f:  # -sig: aman untuk file dari Notepad (BOM)
+            for line in f:
+                kv = parse_env_line(line)
+                if kv:
+                    data[kv[0]] = kv[1]
+    return data
+
+
 def load_dotenv(path):
-    if not os.path.exists(path):
-        return
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    """Isi os.environ dari .env. Variabel environment yang sudah terisi tetap menang;
+    yang kosong ditimpa nilai dari file."""
+    for k, v in read_env_file(path).items():
+        if not os.environ.get(k):
+            os.environ[k] = v
 
 
 def load_config(path="config.yaml"):

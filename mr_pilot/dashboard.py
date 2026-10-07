@@ -293,6 +293,7 @@ class Dashboard:
         self.cfg = cfg
         self.host, self.port = d.get("host", "127.0.0.1"), int(d.get("port", 8787))
         self.password = str(d.get("password") or "")
+        self.env_path = os.path.join(cfg.get("_base_dir", "."), ".env")
         if self.host not in ("127.0.0.1", "localhost", "::1") and not self.password:
             raise ValueError("dashboard.password wajib diisi jika dashboard dibuka ke jaringan "
                              f"(host {self.host}).")
@@ -414,11 +415,18 @@ class _Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length") or 0)
             form = parse_qs(self.rfile.read(n).decode())
             pw = (form.get("password") or [""])[0]
-            if self.app.password and hmac.compare_digest(pw, self.app.password):
+            if self.app.password and hmac.compare_digest(pw.encode(), self.app.password.encode()):
                 tok = self.app.make_token()
                 return self._send(302, b"", headers={
                     "Location": "/",
                     "Set-Cookie": f"mrp_session={tok}; HttpOnly; SameSite=Strict; Path=/; Max-Age={7 * 86400}"})
+            hint = ""
+            if pw.strip() == self.app.password:
+                hint = " (beda spasi di awal/akhir)"
+            elif len(pw) != len(self.app.password):
+                hint = " (panjangnya berbeda)"
+            log.warning("Login dashboard gagal%s. Password aktif = DASHBOARD_PASSWORD di %s saat MR Pilot "
+                        "terakhir dinyalakan; cek dengan perintah `password`.", hint, self.app.env_path)
             time.sleep(1)
             return self._send(302, b"", headers={"Location": "/login?e=1"})
         return self._mutate("POST", u)
