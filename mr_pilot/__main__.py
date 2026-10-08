@@ -139,7 +139,8 @@ def main(argv=None):
                 sys.exit(2)
     from .setup_wizard import bootstrap_data_dir
     if a.command == "run" and os.path.basename(a.config) == "config.yaml":
-        bootstrap_data_dir(data_dir)  # standards/ & home/ on first start
+        for item in bootstrap_data_dir(data_dir):  # standards/ & home/ on first start, old defaults upgraded
+            print(f"[setup] {item}")
     try:
         cfg = load_config(a.config)
     except ConfigError as ex:

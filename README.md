@@ -3,13 +3,14 @@
 Asisten review & merge MR GitLab untuk Tech Lead.
 
 ```
-MR baru (Anda reviewer) ─► review otomatis ─► kartu di Telegram ─► tap ✅ Merge
+MR baru (Anda Reviewer / Assignee) ─► review otomatis ─► kartu di Telegram ─► tap ✅ Merge
                                                                     │
                      pesan "sudah di-merge" ke grup IDAS (akun Teams Anda) ◄─ approve + merge di GitLab
 ```
 
-- **Cek otomatis** tiap 2 menit MR yang reviewer-nya Anda (tanpa webhook, cocok untuk PC kantor).
-- **Review** pakai API AI (Claude / OpenAI-compatible) *atau* membaca komentar bot "AI Code Review" yang sudah ada. Mode `bot_then_llm` menunggu bot dulu, lalu fallback ke API.
+- **Cek otomatis** tiap 1 menit semua MR terbuka yang menjadikan Anda **Reviewer atau Assignee** (`gitlab.watch`), termasuk saat Anda baru ditambahkan belakangan. Tanpa webhook, cocok untuk PC kantor. Ketik `/cek` di Telegram untuk cek saat itu juga. MR Draft dikirim begitu statusnya *Ready*.
+- **Review** pakai API AI (Claude / OpenAI-compatible) *atau* membaca komentar bot "AI Code Review" yang sudah ada. Mode `bot_then_llm` memakai komentar bot kalau sudah ada; kalau belum, langsung review pakai API AI (menunggu bot hanya jika belum ada provider AI, dan Anda tetap langsung diberi kabar).
+- `config.yaml` versi lama diperbarui otomatis saat start (salinan lama: `config.yaml.bak`), hanya baris yang belum pernah Anda ubah.
 - **Detail MR** di setiap kartu: 👤 pembuat (nama + username, Jira, waktu), 🎯 masalah yang diselesaikan, 🔧 daftar perubahan, 👍 yang sudah bagus. Sumbernya review AI; kalau AI tidak mengisi, diambil dari deskripsi MR (bagian *Reasons for Change* / *Changes*) dan dari *Highlights* bot review. Kalau terlalu panjang, detail dikirim sebagai pesan terpisah tepat sebelum kartu.
 - **Kartu Telegram** berisi verdict, breaking change, temuan, dan cek otomatis (pipeline, conflict, target branch). Tombol: **Merge · Tolak · Review ulang · Buka MR**.
 - **Merge aman**: hanya jalan jika pipeline hijau, tidak ada conflict, dan tidak ada commit baru sejak direview. Jika verdict bukan *Approve*, diminta konfirmasi kedua.

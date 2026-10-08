@@ -67,7 +67,7 @@ class FakeGL:
     def me(self):
         return {"username": "nova.andriana"}
 
-    def list_review_mrs(self, u, also_assigned=False):
+    def list_review_mrs(self, u, watch=("reviewer", "assignee")):
         return [self.mr] if self.mr["state"] == "opened" else []
 
     def get_mr(self, pid, iid):

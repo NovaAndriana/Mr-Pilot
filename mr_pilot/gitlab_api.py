@@ -50,15 +50,18 @@ class GitLab:
     def me(self):
         return self.get("/user")
 
-    def list_review_mrs(self, username, also_assigned=False):
+    def list_review_mrs(self, username, watch=("reviewer", "assignee")):
+        """Open MRs where `username` is reviewer and/or assignee (per `watch`), each listed once."""
         base = {"scope": "all", "state": "opened"}
-        mrs = self.get_all("/merge_requests", {**base, "reviewer_username": username})
-        if also_assigned:
-            seen = {m["id"] for m in mrs}
-            for m in self.get_all("/merge_requests", {**base, "assignee_username": username}):
+        out, seen = [], set()
+        for role, param in (("reviewer", "reviewer_username"), ("assignee", "assignee_username")):
+            if role not in watch:
+                continue
+            for m in self.get_all("/merge_requests", {**base, param: username}):
                 if m["id"] not in seen:
-                    mrs.append(m)
-        return mrs
+                    seen.add(m["id"])
+                    out.append(m)
+        return out
 
     def get_mr(self, pid, iid):
         return self.get(f"/projects/{_pid(pid)}/merge_requests/{iid}")

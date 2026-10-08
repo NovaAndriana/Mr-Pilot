@@ -110,14 +110,15 @@ class FakeGitLab(Server):
 
     def add_mr(self, iid, title, sha, author=("Dewi Lestari", "dewi.l"), pipeline="success", description="",
                files=None, commit_msg=None, pid=7, conflicts=False, draft=False, reviewers=("nova.andriana",),
-               target="staging"):
+               target="staging", assignees=()):
         files = files or {"internal/x/usecase.go": "+func A() {}\n"}
         diffs = [{"new_path": p, "old_path": p, "new_file": False, "deleted_file": False, "renamed_file": False,
                   "diff": "@@ -1,1 +1,%d @@\n%s" % (body.count("\n") + 1, body)} for p, body in files.items()]
         mr = {"id": pid * 10000 + iid, "iid": iid, "project_id": pid, "title": title, "description": description,
               "state": "opened", "draft": draft, "work_in_progress": draft, "sha": sha,
               "author": {"name": author[0], "username": author[1]},
-              "reviewers": [{"username": r} for r in reviewers], "assignees": [],
+              "reviewers": [{"username": r} for r in reviewers],
+              "assignees": [{"username": a} for a in assignees],
               "source_branch": f"feat/{iid}", "target_branch": target,
               "references": {"short": f"!{iid}", "full": f"idas/idas-repo-be!{iid}"},
               "web_url": f"{self.url}/idas/idas-repo-be/-/merge_requests/{iid}",
@@ -186,9 +187,11 @@ class _GitLabHandler(_Base):
             if p == "/user":
                 return self._json(200, f.user)
             if p == "/merge_requests":
-                who = (q.get("reviewer_username") or [None])[0]
+                rev = (q.get("reviewer_username") or [None])[0]
+                asg = (q.get("assignee_username") or [None])[0]
                 rows = [m for m in f.mrs.values() if m["state"] == "opened"
-                        and (who is None or who in [r["username"] for r in m["reviewers"]])]
+                        and (rev is None or rev in [r["username"] for r in m["reviewers"]])
+                        and (asg is None or asg in [a["username"] for a in m["assignees"]])]
                 return self._paged(rows, q)
             m = re.match(r"^/projects/(\d+)/merge_requests/(\d+)(/.*)?$", p)
             if m:
