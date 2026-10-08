@@ -223,7 +223,7 @@ def test_02_new_mr_card_review_quality(w):
     text = w.tg.messages[mid]["text"]
     for needle in ("Dewi Lestari", "Masalah yang diselesaikan", "Approve", "Standar kode", "go-sql-concat"):
         assert needle in text, needle
-    assert set(w.tg.buttons(mid)) == {"✅ Merge", "❌ Tolak", "🔁 Review ulang", "🔗 Buka MR"}
+    assert set(w.tg.buttons(mid)) == {"✅ Merge", "❌ Tolak", "🗑️ Merge + hapus branch", "🔁 Review ulang", "🔗 Buka MR"}
     # AI: provider A broken -> fell back to B
     assert w.ai_a.calls and w.ai_b.calls
     # code standard warnings on the commit (file + line), summary note, commit status
@@ -781,3 +781,35 @@ def test_28_polls_on_its_own_and_migrates_old_config(w):
     mid = wait(lambda: next((m for m in w.tg.sent[n:] if "!550" in w.tg.messages[m]["text"]
                              and any("Merge" in b for b in w.tg.buttons(m))), None), 75, "kartu otomatis tanpa /cek")
     assert "Anda: Assignee" in w.tg.messages[mid]["text"]
+
+
+def test_29_source_branch_kept_unless_chosen(w):
+    """Merge keeps the source branch (even if the MR's own "Delete source branch" box is ticked);
+    deleting happens only with the explicit "Merge + hapus branch" button, also via confirmation."""
+    w.gl.add_mr(560, "fix: keep branch", "a6" * 20, delete_branch_checkbox=True, files={"a.go": GO_OK})
+    w.gl.add_mr(561, "fix: hapus branch", "a7" * 20, files={"a.go": GO_OK})
+    w.verdicts["fix: hapus lewat konfirmasi"] = {"verdict": "NEEDS_ATTENTION"}
+    w.gl.add_mr(562, "fix: hapus lewat konfirmasi", "a8" * 20, files={"a.go": GO_OK})
+    n = len(w.tg.sent)
+    cek(w)
+    c560, c561, c562 = card(w, 560, n), card(w, 561, n), card(w, 562, n)
+    # 1) plain Merge -> branch kept, MR checkbox switched off first
+    w.tg.press(c560, w.tg.buttons(c560)["✅ Merge"])
+    wait(lambda: "Merged" in w.tg.messages[c560]["text"], 20, "merge 560")
+    body = next(b for k, b in w.gl.merges if k == (7, 560))
+    assert body["should_remove_source_branch"] is False
+    assert w.gl.mrs[(7, 560)]["force_remove_source_branch"] is False
+    assert "feat/560" not in w.gl.deleted_branches
+    assert "dipertahankan" in w.tg.messages[c560]["text"]
+    # 2) explicit "Merge + hapus branch"
+    w.tg.press(c561, w.tg.buttons(c561)["🗑️ Merge + hapus branch"])
+    wait(lambda: "Merged" in w.tg.messages[c561]["text"], 20, "merge 561")
+    assert "feat/561" in w.gl.deleted_branches and "dihapus" in w.tg.messages[c561]["text"]
+    # 3) delete choice survives the confirmation step
+    n = len(w.tg.sent)
+    w.tg.press(c562, w.tg.buttons(c562)["🗑️ Merge + hapus branch"])
+    conf = wait(lambda: w.tg.find("Yakin tetap merge", n), 15, "konfirmasi 562")
+    btn = next(b for b in w.tg.buttons(conf) if "hapus branch" in b)
+    w.tg.press(conf, w.tg.buttons(conf)[btn])
+    wait(lambda: "Merged" in w.tg.messages[c562]["text"], 20, "merge 562")
+    assert "feat/562" in w.gl.deleted_branches

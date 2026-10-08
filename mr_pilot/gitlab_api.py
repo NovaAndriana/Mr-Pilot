@@ -128,7 +128,12 @@ class GitLab:
         payload = {"sha": sha} if sha else {}
         return self._req("POST", f"/projects/{_pid(pid)}/merge_requests/{iid}/approve", json=payload)
 
-    def merge(self, pid, iid, sha=None, remove_source_branch=True, squash=False):
+    def set_remove_source_branch(self, pid, iid, value):
+        r = self._req("PUT", f"/projects/{_pid(pid)}/merge_requests/{iid}", json={"remove_source_branch": bool(value)})
+        r.raise_for_status()
+        return r
+
+    def merge(self, pid, iid, sha=None, remove_source_branch=False, squash=False):
         payload = {"should_remove_source_branch": remove_source_branch, "squash": squash}
         if sha:
             payload["sha"] = sha

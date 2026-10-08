@@ -82,6 +82,8 @@ _MIGRATIONS = [
      r"\1poll_interval_seconds: ${GITLAB_POLL_SECONDS:-60}   # cek MR baru tiap 1 menit (min 30)"),
     (re.compile(r"^(\s*)also_assigned_to_me:\s*(false|true)\s*#.*$", re.M),
      r"\1watch: [reviewer, assignee]     # kirim ke Telegram kalau Anda dijadikan Reviewer ATAU Assignee"),
+    (re.compile(r"^(\s*)remove_source_branch:\s*true\s*$", re.M),
+     r"\1source_branch: ${MERGE_SOURCE_BRANCH:-ask}   # ask = 2 tombol: Merge (branch tetap) & Merge + hapus branch"),
     (re.compile(r"^(\s*)# bot_then_llm = tunggu komentar bot; kalau tidak muncul dalam wait_minutes, pakai API AI\s*$",
                 re.M),
      r"\1# bot_then_llm = pakai komentar bot kalau sudah ada; kalau belum, langsung review pakai API AI"),

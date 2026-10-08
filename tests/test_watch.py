@@ -85,3 +85,30 @@ def test_bot_then_llm_reviews_immediately_when_ai_ready():
 
 def test_bot_then_llm_waits_only_without_ai():
     assert _reviewer(False).review({"project_id": 1, "iid": 2, "description": ""}, time.time()) is None
+
+
+def test_source_branch_option_and_buttons(tmp_path):
+    from mr_pilot.formatting import review_buttons
+    c = _merge(copy.deepcopy(DEFAULTS), {"telegram": {"chat_id": "1"}})
+    validate(c)
+    assert c["merge"]["source_branch"] == "ask"
+    labels = lambda mode: [b[0] for row in review_buttons(7, 1, "http://x", mode) for b in row]  # noqa: E731
+    assert "✅ Merge" in labels("ask") and "🗑️ Merge + hapus branch" in labels("ask")
+    assert "🗑️ Merge + hapus branch" not in labels("keep")
+    assert labels("delete")[0] == "✅ Merge + hapus branch"
+    c["merge"]["source_branch"] = "maybe"
+    with pytest.raises(ConfigError):
+        validate(c)
+    p = tmp_path / "config.yaml"
+    p.write_text("merge:\n  remove_source_branch: true\n  squash: false\n", encoding="utf-8")
+    assert migrate_config(str(p)) == 1
+    assert "source_branch: ${MERGE_SOURCE_BRANCH:-ask}" in p.read_text(encoding="utf-8")
+
+
+def test_want_delete():
+    from mr_pilot.app import App
+    a = App.__new__(App)
+    for mode, action, exp in (("ask", "m", False), ("ask", "md", True), ("ask", "mfd", True),
+                              ("keep", "md", False), ("delete", "m", True)):
+        a.cfg = {"merge": {"source_branch": mode}}
+        assert a.want_delete(action) is exp, (mode, action)

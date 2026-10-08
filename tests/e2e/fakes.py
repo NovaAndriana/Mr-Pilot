@@ -104,13 +104,14 @@ class FakeGitLab(Server):
         self.statuses = []
         self.approvals = []
         self.merges = []
+        self.deleted_branches = []
         self.note_seq = 1000
         self.merge_behaviour = {}  # (pid, iid) -> callable or None
         super().__init__(_GitLabHandler)
 
     def add_mr(self, iid, title, sha, author=("Dewi Lestari", "dewi.l"), pipeline="success", description="",
                files=None, commit_msg=None, pid=7, conflicts=False, draft=False, reviewers=("nova.andriana",),
-               target="staging", assignees=()):
+               target="staging", assignees=(), delete_branch_checkbox=False):
         files = files or {"internal/x/usecase.go": "+func A() {}\n"}
         diffs = [{"new_path": p, "old_path": p, "new_file": False, "deleted_file": False, "renamed_file": False,
                   "diff": "@@ -1,1 +1,%d @@\n%s" % (body.count("\n") + 1, body)} for p, body in files.items()]
@@ -119,6 +120,7 @@ class FakeGitLab(Server):
               "author": {"name": author[0], "username": author[1]},
               "reviewers": [{"username": r} for r in reviewers],
               "assignees": [{"username": a} for a in assignees],
+              "force_remove_source_branch": delete_branch_checkbox,
               "source_branch": f"feat/{iid}", "target_branch": target,
               "references": {"short": f"!{iid}", "full": f"idas/idas-repo-be!{iid}"},
               "web_url": f"{self.url}/idas/idas-repo-be/-/merge_requests/{iid}",
@@ -201,6 +203,10 @@ class _GitLabHandler(_Base):
                     return self._json(404, {"message": "404 Not found"})
                 if sub == "" and method == "GET":
                     return self._json(200, mr)
+                if sub == "" and method == "PUT":  # update MR (e.g. remove_source_branch checkbox)
+                    if "remove_source_branch" in body:
+                        mr["force_remove_source_branch"] = bool(body["remove_source_branch"])
+                    return self._json(200, mr)
                 if sub == "/diffs":
                     return self._paged(f.mr_diffs[key], q)
                 if sub == "/commits":
@@ -235,6 +241,9 @@ class _GitLabHandler(_Base):
                         return self._json(405, {"message": "405 Method Not Allowed"})
                     mr["state"] = "merged"
                     f.merges.append((key, body))
+                    # like GitLab: explicit param wins, otherwise the MR's own checkbox decides
+                    if body.get("should_remove_source_branch", mr.get("force_remove_source_branch")):
+                        f.deleted_branches.append(mr["source_branch"])
                     return self._json(200, dict(mr))
             m = re.match(r"^/projects/(\d+)/repository/commits/([0-9a-f]+)/(diff|comments)$", p)
             if m:
