@@ -170,8 +170,10 @@ class FakeAI:
     def available(self, task=None):
         return ["fake"]
 
-    def complete(self, system, user, task="review"):
+    def complete(self, system, user, task="review", validate=None):
         self.calls.append(task)
+        if validate:
+            validate(self.reply)
         return self.reply, "fake"
 
 

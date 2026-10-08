@@ -1,7 +1,11 @@
 """Minimal GitLab REST v4 client (only what MR Pilot needs)."""
 import urllib.parse
+import warnings
 
 import requests
+import urllib3
+
+from .util import retry_session
 
 
 def _pid(pid):
@@ -9,11 +13,16 @@ def _pid(pid):
 
 
 class GitLab:
-    def __init__(self, url, token, verify=True, timeout=30):
+    def __init__(self, url, token, verify=True, timeout=60):
         self.base = url.rstrip("/") + "/api/v4"
-        self.s = requests.Session()
+        # GET/HEAD retried on network errors, 429 and 5xx. Writes (merge, notes) are never retried
+        # automatically, so a slow response can't cause a double merge or duplicate comment.
+        self.s = retry_session(total=3, backoff=1.0)
         self.s.headers["PRIVATE-TOKEN"] = token
+        self.s.headers["User-Agent"] = "mr-pilot"
         self.s.verify = verify
+        if not verify:  # self-signed GitLab: one notice at startup instead of a warning per request
+            warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
         self.timeout = timeout
 
     def _req(self, method, path, **kw):
@@ -64,11 +73,12 @@ class GitLab:
             raise
 
     def get_commits(self, pid, iid):
-        return self.get(f"/projects/{_pid(pid)}/merge_requests/{iid}/commits", {"per_page": 100})
+        """Newest first (GitLab order), all pages."""
+        return self.get_all(f"/projects/{_pid(pid)}/merge_requests/{iid}/commits")
 
     def get_notes(self, pid, iid):
         return self.get(f"/projects/{_pid(pid)}/merge_requests/{iid}/notes",
-                        {"sort": "desc", "order_by": "created_at", "per_page": 50})
+                        {"sort": "desc", "order_by": "updated_at", "per_page": 100})
 
     def get_commit_diff(self, pid, sha):
         return self.get_all(f"/projects/{_pid(pid)}/repository/commits/{sha}/diff")

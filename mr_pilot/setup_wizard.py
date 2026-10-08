@@ -15,6 +15,8 @@ import time
 
 import requests
 
+from .util import short_error
+
 PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 C = {"ok": "\033[32m", "bad": "\033[31m", "warn": "\033[33m", "dim": "\033[2m", "b": "\033[1m", "x": "\033[0m"}
@@ -140,20 +142,24 @@ def check_gitlab(url, token, verify=True):
     except requests.exceptions.SSLError:
         return False, "SSL_ERROR"
     except Exception as ex:
-        return False, str(ex)[:120]
+        return False, short_error(ex, 120)
+
+
+def tg_base(token):
+    return f"{(os.environ.get('TELEGRAM_API_BASE') or 'https://api.telegram.org').rstrip('/')}/bot{token}"
 
 
 def check_telegram(token):
     try:
-        r = requests.post(f"https://api.telegram.org/bot{token}/getMe", timeout=15).json()
+        r = requests.post(tg_base(token) + "/getMe", timeout=15).json()
         return (True, "@" + r["result"]["username"]) if r.get("ok") else (False, r.get("description", "token salah"))
     except Exception as ex:
-        return False, str(ex)[:120]
+        return False, short_error(ex, 120)  # raw requests errors contain the token in the URL
 
 
 def detect_chat_id(token, wait=90):
     """Wait for the user to message the bot; return chat id."""
-    base = f"https://api.telegram.org/bot{token}"
+    base = tg_base(token)
     try:
         upd = requests.post(base + "/getUpdates", json={"timeout": 0}, timeout=15).json().get("result", [])
         offset = (upd[-1]["update_id"] + 1) if upd else 0
@@ -233,7 +239,7 @@ def run_setup(data_dir, interactive=True):
             chat = str(cid)
             say(f"Chat id {chat} ({name})", "ok")
             try:
-                requests.post(f"https://api.telegram.org/bot{tg}/sendMessage", timeout=15,
+                requests.post(tg_base(tg) + "/sendMessage", timeout=15,
                               json={"chat_id": cid, "text": "✅ MR Pilot terhubung. Notifikasi MR akan dikirim ke sini."})
             except Exception:
                 pass

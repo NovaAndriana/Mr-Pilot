@@ -8,6 +8,7 @@ services:
       args:
         INSTALL_CLAUDE_CODE: ${INSTALL_CLAUDE_CODE:-false}
     restart: unless-stopped
+    stop_grace_period: 75s   # beri waktu merge yang sedang berjalan selesai sebelum SIGKILL
     user: "${MRP_UID:-1000}:${MRP_GID:-1000}"
     environment:
       HOME: /data/home

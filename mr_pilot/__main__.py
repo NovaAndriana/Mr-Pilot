@@ -3,23 +3,49 @@ import argparse
 import json
 import logging
 import os
+import faulthandler
+import signal
 import sys
 import time
 from logging.handlers import RotatingFileHandler
 
-from .config import load_config, require
+from . import __version__
+from .config import ConfigError, load_config, require
+from .util import RedactingFilter
 
 
 def setup_logging(path):
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     root = logging.getLogger()
-    root.setLevel(logging.INFO)
-    fh = RotatingFileHandler(path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
-    fh.setFormatter(fmt)
-    sh = logging.StreamHandler(sys.stdout)
-    sh.setFormatter(fmt)
-    root.handlers = [fh, sh]
+    root.setLevel(getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO))
+    handlers = [logging.StreamHandler(sys.stdout)]
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        handlers.append(RotatingFileHandler(path, maxBytes=2_000_000, backupCount=5, encoding="utf-8"))
+    except OSError as ex:  # read-only folder: keep logging to stdout (docker logs)
+        print(f"Log file {path} tidak bisa ditulis ({ex}); log hanya ke layar.", file=sys.stderr)
+    for h in handlers:
+        h.setFormatter(fmt)
+        h.addFilter(RedactingFilter())  # token/API key never reach the log
+    root.handlers = handlers
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+
+def cmd_health(config_path):
+    """Exit 0 when the main loop wrote its heartbeat recently (used by Docker HEALTHCHECK)."""
+    data_dir = os.path.dirname(os.path.abspath(config_path))
+    if not os.path.exists(config_path):
+        print("menunggu setup")
+        return 0
+    hb = os.path.join(data_dir, ".heartbeat")
+    try:
+        age = time.time() - os.path.getmtime(hb)
+    except OSError:
+        print("belum ada heartbeat")
+        return 1
+    limit = int(os.environ.get("MRP_HEALTH_MAX_AGE", "600"))
+    print(f"heartbeat {int(age)} detik lalu (batas {limit})")
+    return 0 if age < limit else 1
 
 
 def cmd_password(cfg, data_dir, a):
@@ -51,10 +77,11 @@ def cmd_password(cfg, data_dir, a):
 def main(argv=None):
     p = argparse.ArgumentParser(prog="mr_pilot", description="Auto review + merge MR GitLab via Telegram")
     p.add_argument("command", nargs="?", default="run",
-                   choices=["run", "setup", "doctor", "setup-ci", "demo", "dashboard", "password"],
+                   choices=["run", "setup", "doctor", "setup-ci", "demo", "dashboard", "password", "health"],
                    help="run (default) | setup: wizard konfigurasi | doctor: cek koneksi | "
                         "setup-ci: pasang CI/CD + deploy | demo: dashboard data contoh")
     p.add_argument("--config", default=os.environ.get("MRP_CONFIG", "config.yaml"))
+    p.add_argument("--version", action="version", version=f"MR Pilot {__version__}")
     p.add_argument("--non-interactive", action="store_true", help="setup/setup-ci: ambil jawaban dari env")
     p.add_argument("--src", default=os.environ.get("MRP_SRC", "."), help="setup-ci: folder repo (default .)")
     p.add_argument("--no-ai-test", action="store_true", help="doctor: jangan panggil AI")
@@ -74,6 +101,8 @@ def main(argv=None):
 
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    if a.command == "health":
+        sys.exit(cmd_health(a.config))
     data_dir = os.path.dirname(os.path.abspath(a.config))
     if a.demo:
         a.command = "demo"
@@ -111,7 +140,14 @@ def main(argv=None):
     from .setup_wizard import bootstrap_data_dir
     if a.command == "run" and os.path.basename(a.config) == "config.yaml":
         bootstrap_data_dir(data_dir)  # standards/ & home/ on first start
-    cfg = load_config(a.config)
+    try:
+        cfg = load_config(a.config)
+    except ConfigError as ex:
+        print(f"Config tidak valid: {ex}\nPerbaiki {a.config} / .env lalu jalankan lagi (atau jalankan setup).",
+              file=sys.stderr)
+        if os.environ.get("MRP_IN_DOCKER") == "1" and a.command == "run":
+            time.sleep(30)  # restart policy: don't spin
+        sys.exit(2)
     if a.command == "demo":
         import tempfile
         cfg["storage"]["log_file"] = os.path.join(tempfile.gettempdir(), "mr-pilot-demo.log")
@@ -221,15 +257,30 @@ def main(argv=None):
             print(f"Dashboard: http://{d.host}:{d.port}")
         except Exception as ex:
             logging.error("Dashboard tidak bisa dijalankan: %s", ex)
-    while True:  # restart loop on unexpected crash
+    from .app import Stop
+    # docker stop / Ctrl+C: finish a running merge first, then exit cleanly
+    if hasattr(signal, "SIGUSR1"):  # `kill -USR1 <pid>` dumps all thread stacks to the log (debug hangs)
+        try:
+            faulthandler.register(signal.SIGUSR1, all_threads=True)
+        except Exception:
+            pass
+    signal.signal(signal.SIGTERM, app.request_stop)
+    signal.signal(signal.SIGINT, app.request_stop)
+    while not app.stop_requested:  # restart loop on unexpected crash
         try:
             app.run_forever()
-        except KeyboardInterrupt:
-            print("Berhenti.")
-            return
+        except (Stop, KeyboardInterrupt):
+            break
         except Exception:
-            logging.exception("Crash, restart 30 detik lagi")
-            time.sleep(30)
+            logging.exception("Crash, mulai ulang 30 detik lagi")
+            try:
+                for _ in range(30):
+                    if app.stop_requested:
+                        break
+                    time.sleep(1)
+            except (Stop, KeyboardInterrupt):
+                break
+    logging.info("MR Pilot berhenti.")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ from datetime import datetime
 from fnmatch import fnmatch
 
 
+from .util import short_error
+
 log = logging.getLogger("mr_pilot.review")
 
 VERDICTS = ("APPROVE", "NEEDS_ATTENTION", "REQUEST_CHANGES", "UNKNOWN")
@@ -53,25 +55,58 @@ def build_diff_text(diffs, ignore, max_chars):
 
 
 # ----------------------------------------------------------- JSON handling
+_FENCE = re.compile(r"```(?:json|JSON)?\s*\n(.*?)```", re.S)
+
+
 def extract_json(text):
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.M)
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("Respons AI tidak berisi JSON")
-    return json.loads(text[start:end + 1])
+    """First JSON object in an LLM reply: fenced ```json block first, else scan for a decodable `{`.
+    Tolerates prose before/after, braces in prose, and several objects."""
+    text = (text or "").strip()
+    dec = json.JSONDecoder()
+    for block in _FENCE.findall(text) + [text]:
+        block = block.strip()
+        i = block.find("{")
+        while i != -1:
+            try:
+                obj, _ = dec.raw_decode(block, i)
+                if isinstance(obj, dict):
+                    return obj
+            except ValueError:
+                pass
+            i = block.find("{", i + 1)
+    raise ValueError("Respons AI tidak berisi JSON yang valid")
+
+
+_SEV_MAP = {"blocker": "blocker", "critical": "blocker", "kritis": "blocker", "high": "major", "major": "major",
+            "medium": "minor", "minor": "minor", "low": "minor", "info": "info", "suggestion": "info"}
+_VERDICT_MAP = {"APPROVE": "APPROVE", "APPROVED": "APPROVE", "LGTM": "APPROVE",
+                "NEEDS_ATTENTION": "NEEDS_ATTENTION", "COMMENT": "NEEDS_ATTENTION",
+                "REQUEST_CHANGES": "REQUEST_CHANGES", "CHANGES_REQUESTED": "REQUEST_CHANGES", "REJECT": "REQUEST_CHANGES"}
+
+
+def validate_review(raw):
+    """Raise if an LLM reply isn't a usable review (lets AIManager fall back to the next provider)."""
+    data = extract_json(raw)
+    if "verdict" not in data and "findings" not in data and "summary" not in data:
+        raise ValueError("JSON review tidak punya verdict/summary/findings")
+    return data
 
 
 def normalize(data, source):
-    verdict = str(data.get("verdict", "UNKNOWN")).upper().replace(" ", "_")
-    if verdict not in VERDICTS:
-        verdict = "NEEDS_ATTENTION"
+    if not isinstance(data, dict):
+        data = {}
+    verdict = _VERDICT_MAP.get(str(data.get("verdict", "")).strip().upper().replace(" ", "_").replace("-", "_"),
+                               "NEEDS_ATTENTION")
     findings = []
-    for f in data.get("findings") or []:
+    raw_findings = data.get("findings") or []
+    if not isinstance(raw_findings, list):
+        raw_findings = [raw_findings]
+    for f in raw_findings:
         if isinstance(f, str):
             f = {"severity": "minor", "title": f}
-        sev = str(f.get("severity", "minor")).lower()
-        if sev not in ("blocker", "major", "minor", "info"):
-            sev = "minor"
+        if not isinstance(f, dict):
+            continue
+        sev = _SEV_MAP.get(str(f.get("severity", "minor")).strip().lower(), "minor")
         findings.append({"severity": sev, "title": str(f.get("title", "")).strip(),
                          "file": str(f.get("file", "") or "").strip(),
                          "detail": str(f.get("detail", "") or "").strip()})
@@ -81,7 +116,7 @@ def normalize(data, source):
     if verdict == "APPROVE" and any(f["severity"] in ("blocker", "major") for f in findings):
         verdict = "NEEDS_ATTENTION"
     return {"source": source, "verdict": verdict,
-            "summary": str(data.get("summary", "")).strip(),
+            "summary": str(data.get("summary", "") or "").strip()[:1500],
             "findings": findings,
             "breaking_changes": _str_list(data.get("breaking_changes"), 5),
             "solves": str(data.get("solves", "") or "").strip(),
@@ -102,16 +137,22 @@ Aturan:
 - Jangan mengarang. Hanya laporkan yang terlihat di diff. Kalau diff terpotong, sebutkan di summary.
 - Maksimal 8 temuan, urutkan dari paling penting. Sertakan file:line bila bisa.
 - verdict APPROVE hanya jika tidak ada temuan blocker/major.
-- Tulis dalam bahasa {language}.
-{extra_rules}
+- Tulis dalam bahasa @@LANGUAGE@@.
+@@EXTRA_RULES@@
 Jawab HANYA dengan JSON valid (tanpa teks lain) dengan skema:
-{{"verdict": "APPROVE|NEEDS_ATTENTION|REQUEST_CHANGES",
+{"verdict": "APPROVE|NEEDS_ATTENTION|REQUEST_CHANGES",
   "summary": "2-3 kalimat penilaianmu atas MR ini",
   "solves": "1-2 kalimat: masalah apa yang diselesaikan / manfaat MR ini bagi produk atau user",
   "changes": ["3-6 poin perubahan utama, bahasa sederhana, mis. 'Response balance-deduction kini menampilkan kuota per user'"],
   "good_points": ["maks 4 hal yang memang bagus dari implementasinya (test, security fix, struktur kode). Kosongkan jika tidak ada, jangan dibuat-buat"],
   "breaking_changes": ["..."],
-  "findings": [{{"severity": "blocker|major|minor", "file": "path:line", "title": "judul singkat", "detail": "penjelasan + saran"}}]}}"""
+  "findings": [{"severity": "blocker|major|minor", "file": "path:line", "title": "judul singkat", "detail": "penjelasan + saran"}]}"""
+
+
+def build_system_prompt(language, extra_rules):
+    # str.replace, bukan .format: extra_rules buatan user boleh berisi { } tanpa merusak prompt
+    return SYSTEM_PROMPT.replace("@@LANGUAGE@@", str(language or "Indonesia")).replace(
+        "@@EXTRA_RULES@@", str(extra_rules or ""))
 
 
 # --------------------------------------------------------- bot comment parse
@@ -319,8 +360,9 @@ class Reviewer:
             uname = (n.get("author") or {}).get("username", "").lower()
             if not ((users and uname in users) or (marker and marker in body.lower())):
                 continue
-            created = _parse_dt(n.get("created_at") or "")
-            if newest and created and created < newest:
+            # bots often edit one note per push: the edit time counts, not the creation time
+            stamp = _parse_dt(n.get("updated_at") or "") or _parse_dt(n.get("created_at") or "")
+            if newest and stamp and stamp < newest:
                 return None  # bot review is for an older commit; wait for a new one
             return parse_bot_review(body)
         return None
@@ -331,20 +373,19 @@ class Reviewer:
             diffs = self.gl.get_diffs(mr["project_id"], mr["iid"])
             diff_text, skipped, truncated = build_diff_text(
                 diffs, self.cfg.get("ignore_files") or [], int(llm["max_diff_chars"]))
-            system = SYSTEM_PROMPT.format(language=llm.get("language", "Indonesia"),
-                                          extra_rules=llm.get("extra_rules") or "")
+            system = build_system_prompt(llm.get("language", "Indonesia"), llm.get("extra_rules"))
             user = (f"Judul MR: {mr['title']}\n"
                     f"Branch: {mr['source_branch']} -> {mr['target_branch']}\n"
                     f"Deskripsi:\n{(mr.get('description') or '-')[:6000]}\n\n"
                     f"File dilewati: {', '.join(skipped) or '-'}\n"
                     f"Diff {'(TERPOTONG) ' if truncated else ''}:\n{diff_text}")
-            raw, provider = self.ai.complete(system, user, "review")
+            raw, provider = self.ai.complete(system, user, "review", validate=validate_review)
             rv = normalize(extract_json(raw), "llm")
             rv["provider"] = provider
             return rv
         except Exception as e:
-            log.exception("LLM review gagal")
-            return empty_review("llm", f"Review AI gagal: {e}")
+            log.warning("LLM review gagal: %s", short_error(e))
+            return empty_review("llm", f"Review AI gagal: {short_error(e)}")
 
 
 # ------------------------------------------------------- deterministic flags

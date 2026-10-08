@@ -175,9 +175,9 @@ Membuka dari HP atau laptop lain di jaringan kantor: install dengan `setup.bat -
 Sudah tersedia **`.github/workflows/mr-pilot.yml`** dan **`.gitlab-ci.yml`**. Setiap push ke `main`/`master`:
 
 ```
-test (pytest, lint, validasi rules.yaml) → build image (GHCR / GitLab Registry) → deploy ke server via SSH
+test (lint, unit, validasi rules.yaml, end-to-end) → build image → end-to-end pada image Docker → push (GHCR) → deploy via SSH
 ```
-Pull request / MR hanya menjalankan test.
+Image hanya di-push kalau sudah lulus test end-to-end. Pull request / MR hanya menjalankan test.
 
 ### Konfigurasi otomatis: `setup.bat ci` / `./setup.sh ci`
 Jalankan dari PC Anda, di folder repo yang sudah di-push ke GitHub atau GitLab:
@@ -190,7 +190,7 @@ Jalankan dari PC Anda, di folder repo yang sudah di-push ke GitHub atau GitLab:
    - GitLab: memakai `GITLAB_TOKEN` jika repo di GitLab yang sama, butuh role **Maintainer**.
 6. Lalu `git push`, dan pipeline berjalan.
 
-Deploy di server menjalankan `deploy/remote-deploy.sh`: login registry dengan token job, `docker compose pull`, `up -d`, cek `/healthz`, lalu membersihkan image lama. Jika health check gagal, job merah dan 50 baris log terakhir ditampilkan.
+Deploy di server menjalankan `deploy/remote-deploy.sh`: login registry (token dikirim lewat stdin, tidak terlihat di daftar proses server), `docker compose pull`, `up -d`, lalu menunggu status **healthy** dari Docker. Kalau image baru tidak sehat dalam 3 menit, skrip otomatis **kembali ke image sebelumnya**, menampilkan 80 baris log terakhir, dan job ditandai gagal.
 
 > GitLab Runner butuh executor Docker dengan *privileged* untuk `docker:dind`. Jika runner kantor tidak mengizinkan, ganti job `build` ke Kaniko.
 
@@ -205,6 +205,20 @@ Deploy di server menjalankan `deploy/remote-deploy.sh`: login registry dengan to
 - Mode `llm` mengirim diff kode ke provider AI. Pastikan sesuai kebijakan perusahaan (atau pakai LLM internal).
 - Dashboard hanya bisa diakses dari PC itu sendiri, kecuali Anda membukanya ke jaringan dengan password.
 - Semua aksi tercatat di `logs/mr-pilot.log`. Status MR tersimpan di `mr_pilot.db` (hapus file ini untuk reset).
+- Token (Telegram, GitLab, API key AI, URL flow Teams) **disensor otomatis** dari log, dashboard, dan pesan error.
+- Login dashboard dikunci 15 menit setelah 10 kali salah dari alamat yang sama. Header CSP/anti-iframe aktif.
+
+## 6a. Ketahanan (production)
+
+- **Tidak ada kartu MR yang hilang**: kalau Telegram sedang gangguan, MR ditandai `notify_failed` dan dikirim ulang otomatis.
+- **Merge aman**: tap dua kali, commit baru sesaat sebelum merge (SHA dicek), conflict, Draft, pipeline belum selesai, dan koneksi putus saat merge (status asli dicek ulang ke GitLab) semuanya ditangani.
+- **Berhenti dengan aman**: `docker stop` / Ctrl+C menunggu merge yang sedang berjalan selesai (`stop_grace_period: 75s`). Kalau proses mati paksa di tengah merge, saat menyala lagi status MR dicocokkan ke GitLab.
+- **Gangguan jaringan**: GitLab GET di-retry otomatis (bukan merge/komentar, agar tidak dobel); Telegram 429/5xx di-retry, gangguan panjang memakai backoff 5–60 detik dan hanya dicatat sekali.
+- **Dua instance memakai bot yang sama** (mis. PC dan server): diberi peringatan jelas sekali, tidak spam.
+- **AI**: jawaban AI yang rusak/bukan JSON dianggap gagal dan otomatis pindah ke provider berikutnya.
+- **Health**: `python -m mr_pilot health` (dipakai Docker HEALTHCHECK) mengecek loop utama masih hidup; `GET /healthz` mengembalikan 503 sampai bot benar-benar berjalan.
+- Data lama dibersihkan otomatis setiap hari (aktivitas & log AI 90 hari, pelanggaran standar 365 hari).
+- Debug proses yang macet: `docker compose kill -s USR1 mr-pilot` menulis stack semua thread ke log.
 
 ## 7. Troubleshooting
 
@@ -224,4 +238,17 @@ Deploy di server menjalankan `deploy/remote-deploy.sh`: login registry dengan to
 | Deploy CI gagal "config.yaml belum ada" | Jalankan `setup.bat ci` lagi dan pilih salin config ke server |
 | Dashboard tidak bisa dibuka dari HP | `dashboard.host: 0.0.0.0`, isi password, dan izinkan port 8787 di Windows Firewall |
 
-Uji kode: `pip install pytest && python -m pytest -q`
+| Log: "Bot Telegram yang sama sedang dipakai MR Pilot lain (409)" | MR Pilot jalan di dua tempat dengan bot yang sama (PC dan server). Matikan salah satu |
+| Log: "Dashboard tidak bisa memakai port 8787" | Port dipakai aplikasi lain. Ganti `MRP_PORT` (Docker) / `DASHBOARD_PORT` |
+
+### Menguji
+
+```bash
+pip install -r requirements.txt pytest
+python -m pytest -q --ignore=tests/e2e     # unit test (detik)
+python -m pytest -q tests/e2e              # end-to-end ±3 menit: proses MR Pilot asli melawan
+                                           # GitLab/Telegram/AI/Teams palsu (26 skenario)
+E2E_MODE=docker E2E_IMAGE=mr-pilot:local python -m pytest -q tests/e2e   # sama, terhadap image Docker
+```
+
+Skenario end-to-end mencakup: kartu MR + fallback AI, tidak ada duplikat, merge menunggu pipeline, tap ganda, konfirmasi verdict/standar, tolak dengan/ tanpa komentar, commit baru mengganti kartu, SHA basi, conflict/Draft/HTTP 405, koneksi putus saat merge, user tak berizin, Telegram mati/429/HTML ditolak, kartu sangat panjang, GitLab 502, MR ditutup di luar, Teams gagal, lockout login, API dashboard + SSE + CSP, sensor rahasia di log, SIGTERM saat merge, restart & `kill -9` saat merge, konflik bot 409, config tidak valid, simpan standar/AI dari dashboard, dan tombol palsu.

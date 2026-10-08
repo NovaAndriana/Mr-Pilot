@@ -166,7 +166,14 @@ switch ($Command) {
     if ($Reset) { DC run --rm -T mr-pilot password --reset; DC restart mr-pilot; Wait-Healthy }
     else { docker compose run --rm -T mr-pilot password }
   }
-  "config" { Ensure-Docker; DC run --rm mr-pilot setup }
+  "config" {
+    Ensure-Docker
+    # hentikan bot dulu: wizard memakai bot Telegram yang sama (409) dan menulis ulang .env
+    docker compose stop mr-pilot 2>$null | Out-Null
+    DC run --rm mr-pilot setup
+    DC up -d mr-pilot
+    Wait-Healthy
+  }
   "shell" { Ensure-Docker; docker compose exec mr-pilot bash }
   "demo" {
     Ensure-Docker; DC build | Out-Null
