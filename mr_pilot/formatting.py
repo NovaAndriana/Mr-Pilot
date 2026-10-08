@@ -126,8 +126,13 @@ def build_messages(mr, review, flags, header="🔔 MR baru untuk direview", qual
     return _fit(ref + detail), _fit(head + rv)
 
 
-def review_buttons(pid, iid, url):
-    return [
-        [("✅ Merge", f"m|{pid}|{iid}"), ("❌ Tolak", f"x|{pid}|{iid}")],
-        [("🔁 Review ulang", f"rr|{pid}|{iid}"), ("🔗 Buka MR", f"url:{url}")],
-    ]
+def review_buttons(pid, iid, url, source_branch="ask"):
+    """source_branch: ask -> Merge keeps the branch + extra "Merge + hapus branch"; keep; delete."""
+    if source_branch == "delete":
+        rows = [[("✅ Merge + hapus branch", f"md|{pid}|{iid}"), ("❌ Tolak", f"x|{pid}|{iid}")]]
+    else:
+        rows = [[("✅ Merge", f"m|{pid}|{iid}"), ("❌ Tolak", f"x|{pid}|{iid}")]]
+        if source_branch == "ask":
+            rows.append([("🗑️ Merge + hapus branch", f"md|{pid}|{iid}")])
+    rows.append([("🔁 Review ulang", f"rr|{pid}|{iid}"), ("🔗 Buka MR", f"url:{url}")])
+    return rows

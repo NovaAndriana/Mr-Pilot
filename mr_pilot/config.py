@@ -46,7 +46,8 @@ DEFAULTS = {
         "require_pipeline_success": True,
         "allow_no_pipeline": True,
         "approve_before_merge": True,
-        "remove_source_branch": True,
+        "source_branch": "ask",       # ask = 2 tombol (Merge / Merge + hapus branch) | keep | delete
+        "remove_source_branch": None,  # lama, digantikan source_branch
         "squash": False,
         "confirm_if_not_approved": True,
         "confirm_if_quality_errors": True,
@@ -263,6 +264,10 @@ def validate(cfg):
     cfg["gitlab"]["url"] = url
     if cfg["review"]["mode"] not in ("llm", "bot", "bot_then_llm"):
         raise ConfigError("review.mode harus llm | bot | bot_then_llm")
+    sb = str(cfg["merge"].get("source_branch") or "ask").strip().lower()
+    if sb not in ("ask", "keep", "delete"):
+        raise ConfigError("merge.source_branch harus ask | keep | delete")
+    cfg["merge"]["source_branch"] = sb
     if cfg["teams"]["mode"] not in ("power_automate", "telegram_copy", "off"):
         raise ConfigError("teams.mode harus power_automate | telegram_copy | off")
     if cfg["code_quality"]["report"].get("status_fail_on", "none") not in ("none", "error", "warning"):

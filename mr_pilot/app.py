@@ -348,7 +348,8 @@ class App:
         detail, text = build_messages(mr, review, heuristic_flags(mr, self.cfg), header, quality)
         if detail:
             self.safe_send(detail)
-        msg_id = self.safe_send(text, buttons=review_buttons(pid, iid, mr["web_url"]))
+        msg_id = self.safe_send(text, buttons=review_buttons(pid, iid, mr["web_url"],
+                                                             self.cfg["merge"]["source_branch"]))
         if not msg_id and not self.dry:
             # Telegram unreachable: keep the review, retry the card on the next poll
             attempts = ((rec.get("attempts") or 0) + 1) if same_sha and rec else 1
@@ -420,17 +421,17 @@ class App:
         if not rec:
             self.tg.answer(cid, "Data MR tidak ditemukan")
             return
-        if action in ("m", "mf", "x") and rec["status"] in DONE + ("merging",):
+        if action in ("m", "md", "mf", "mfd", "x") and rec["status"] in DONE + ("merging",):
             label = {"merged": "sudah di-merge", "rejected": "sudah ditolak", "closed": "sudah ditutup",
                      "merging": "sedang diproses"}[rec["status"]]
             self.tg.answer(cid, f"MR ini {label}")
             return
-        if action == "m":
+        if action in ("m", "md"):
             self.tg.answer(cid, "Memproses merge…")
-            self.do_merge(rec, confirmed=False)
-        elif action == "mf":
+            self.do_merge(rec, confirmed=False, delete_branch=self.want_delete(action))
+        elif action in ("mf", "mfd"):
             self.tg.answer(cid, "Merge…")
-            self.do_merge(rec, confirmed=True, confirm_msg_id=msg_id)
+            self.do_merge(rec, confirmed=True, confirm_msg_id=msg_id, delete_branch=self.want_delete(action))
         elif action == "c":
             self.tg.answer(cid, "Dibatalkan")
             self.safe_edit(msg_id, "Merge dibatalkan.")
@@ -487,7 +488,14 @@ class App:
             return False, f"Pipeline masih <b>{e(st)}</b>. Tap Merge lagi setelah selesai."
         return False, f"Pipeline <b>{e(st)}</b>, merge ditahan."
 
-    def do_merge(self, rec, confirmed=False, confirm_msg_id=None):
+    def want_delete(self, action):
+        """Delete the source branch? Only when explicitly chosen (md/mfd) or configured `delete`."""
+        sb = self.cfg["merge"]["source_branch"]
+        if sb == "keep":
+            return False
+        return sb == "delete" or action in ("md", "mfd")
+
+    def do_merge(self, rec, confirmed=False, confirm_msg_id=None, delete_branch=False):
         pid, iid = rec["project_id"], rec["iid"]
         mcfg = self.cfg["merge"]
         verdict = (rec.get("review") or {}).get("verdict", "UNKNOWN")
@@ -522,7 +530,8 @@ class App:
         # blocking checks first, then ask: no point confirming a merge that cannot happen yet
         if reasons and not confirmed:
             self.safe_send(f"<b>!{iid}</b> " + "\n".join(e(r) for r in reasons) + "\nYakin tetap merge?",
-                           buttons=[[("⚠️ Ya, tetap merge", f"mf|{pid}|{iid}"),
+                           buttons=[[("⚠️ Ya, tetap merge" + (" + hapus branch" if delete_branch else ""),
+                                      f"{'mfd' if delete_branch else 'mf'}|{pid}|{iid}"),
                                      ("Batal", f"c|{pid}|{iid}")]])
             return
         if confirm_msg_id:
@@ -542,7 +551,13 @@ class App:
 
             self.store.upsert(key, status="merging")
             try:
-                r = self.gl.merge(pid, iid, sha=mr["sha"], remove_source_branch=mcfg["remove_source_branch"],
+                if not delete_branch and mr.get("force_remove_source_branch"):
+                    # the MR's own "Delete source branch" checkbox would delete it anyway: switch it off
+                    try:
+                        self.gl.set_remove_source_branch(pid, iid, False)
+                    except Exception as ex:
+                        log.warning("tidak bisa mematikan 'hapus source branch' di !%s: %s", iid, short_error(ex))
+                r = self.gl.merge(pid, iid, sha=mr["sha"], remove_source_branch=delete_branch,
                                   squash=mcfg["squash"])
             except Exception as ex:
                 # the request may or may not have reached GitLab: check the real state instead of guessing
@@ -585,7 +600,9 @@ class App:
             teams_line = {"sent": "Teams: terkirim ✅", "off": "Teams: nonaktif",
                           "copy": "Teams: salin pesan di bawah"}.get(status, f"Teams: {status} ⚠️")
             self._finish_card(self.store.get(key) or rec,
-                              f"<b>✅ Merged</b> ke <code>{e(mr['target_branch'])}</code> · {now_str()} · {e(teams_line)}")
+                              f"<b>✅ Merged</b> ke <code>{e(mr['target_branch'])}</code> · {now_str()} · {e(teams_line)}\n"
+                              f"🌿 Branch <code>{e(mr.get('source_branch'))}</code> "
+                              + ("dihapus" if delete_branch else "dipertahankan"))
             if status not in ("sent", "off"):
                 self.safe_send(text, html=False)
             self.event("merged", f"!{iid} di-merge ke {mr['target_branch']}",

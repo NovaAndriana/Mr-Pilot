@@ -43,7 +43,8 @@ merge:
   require_pipeline_success: true  # tolak merge jika pipeline belum hijau
   allow_no_pipeline: true
   approve_before_merge: true      # klik "Approve" atas nama Anda sebelum merge
-  remove_source_branch: true
+  source_branch: ${MERGE_SOURCE_BRANCH:-ask}   # ask = kartu punya 2 tombol: "Merge" (branch tetap) & "Merge + hapus branch"
+                                  # keep = selalu pertahankan branch | delete = selalu hapus branch
   squash: false
   confirm_if_not_approved: true   # minta konfirmasi kedua jika verdict bukan Approve
   confirm_if_quality_errors: true # minta konfirmasi kedua jika ada error standar kode
