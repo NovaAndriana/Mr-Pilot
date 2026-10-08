@@ -4,6 +4,7 @@ usage log, and runtime overrides edited from the dashboard (ai_overrides.json)."
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -11,6 +12,8 @@ import threading
 import time
 
 import requests
+
+from .util import short_error
 
 log = logging.getLogger("mr_pilot.ai")
 
@@ -144,7 +147,16 @@ class AIManager:
         with self.lock:
             ov = self._load_overrides()
             prov = ov.setdefault("providers", {})
+            if not isinstance(patch, dict):
+                raise ValueError("format pengaturan AI tidak valid")
             for name, p in (patch.get("providers") or {}).items():
+                if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,40}", str(name)):
+                    raise ValueError(f"Nama provider tidak valid: {name!r} (huruf kecil, angka, - dan _)")
+                if not isinstance(p, dict):
+                    raise ValueError(f"Pengaturan {name} tidak valid")
+                p = _validate_fields(name, p)
+                if name not in self.providers and not p.get("type") and name not in prov:
+                    raise ValueError(f"Provider {name} belum ada; sertakan type untuk menambah")
                 cur = prov.setdefault(name, {})
                 if p.get("type") and name not in self.providers:
                     if p["type"] not in TYPES:
@@ -220,8 +232,9 @@ class AIManager:
                               "needs_key": v["needs_key"]} for k, v in TYPES.items()}}
 
     # ----------------------------------------------------------- calling
-    def complete(self, system, user, task="review"):
-        """Try providers in order; returns (text, provider_name). Raises AIError if all fail."""
+    def complete(self, system, user, task="review", validate=None):
+        """Try providers in order; returns (text, provider_name). Raises AIError if all fail.
+        validate(text) may raise to reject a reply (e.g. broken JSON) -> next provider is tried."""
         errors = []
         for name in self.chain(task):
             p = self.providers[name]
@@ -233,6 +246,11 @@ class AIManager:
                 text = self.call(p, system, user)
                 if not text or not text.strip():
                     raise AIError("respons kosong")
+                if validate:
+                    try:
+                        validate(text)
+                    except Exception as vex:
+                        raise AIError(f"jawaban tidak valid: {vex}") from None
                 self._log(name, task, True, t0)
                 return text, name
             except Exception as ex:
@@ -285,7 +303,7 @@ class AIManager:
                 j = r.json()
                 msg = (j.get("error") or {}).get("message") if isinstance(j.get("error"), dict) else j.get("error")
                 msg = msg or j.get("message") or r.text[:200]
-            except ValueError:
+            except Exception:
                 msg = r.text[:200]
             raise AIError(f"HTTP {r.status_code}: {msg}")
 
@@ -398,10 +416,36 @@ class AIManager:
         return sorted(m["id"] for m in r.json().get("data", []))
 
 
+def _validate_fields(name, p):
+    """Coerce/validate dashboard input so a bad value can't break calls later."""
+    out = dict(p)
+    if "enabled" in out:
+        v = out["enabled"]
+        out["enabled"] = v if isinstance(v, bool) else str(v).lower() in ("true", "1", "yes", "on")
+    for k in ("model", "label", "cli_path"):
+        if k in out:
+            out[k] = str(out[k] or "").strip()[:200]
+    if "base_url" in out:
+        u = str(out["base_url"] or "").strip().rstrip("/")
+        if u and not re.match(r"^https?://[^\s/]+", u):
+            raise ValueError(f"Base URL {name} harus diawali http:// atau https://")
+        out["base_url"] = u
+    if "timeout" in out and out["timeout"] not in (None, ""):
+        try:
+            out["timeout"] = max(10, min(int(out["timeout"]), 1800))
+        except (TypeError, ValueError):
+            raise ValueError(f"Timeout {name} harus angka (detik)") from None
+    if "temperature" in out and out["temperature"] not in (None, ""):
+        try:
+            out["temperature"] = max(0.0, min(float(out["temperature"]), 2.0))
+        except (TypeError, ValueError):
+            raise ValueError(f"Temperature {name} harus angka 0-2") from None
+    if "api_key" in out and out["api_key"] is not None:
+        out["api_key"] = str(out["api_key"]).strip()
+        if any(c.isspace() for c in out["api_key"]):
+            raise ValueError(f"API key {name} mengandung spasi")
+    return out
+
+
 def _short_err(ex):
-    s = str(ex)
-    if isinstance(ex, requests.ConnectionError):
-        s = "tidak bisa terhubung"
-    elif isinstance(ex, requests.Timeout):
-        s = "timeout"
-    return s[:300]
+    return short_error(ex)

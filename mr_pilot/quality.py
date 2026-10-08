@@ -3,7 +3,10 @@ import hashlib
 import logging
 import time
 
+import requests
+
 from .ai import AIManager
+from .util import short_error
 from .reviewer import extract_json
 from .standards import (SEV_RANK, Standards, annotate_diff, count_by_severity, sort_violations,
                         violation)
@@ -62,9 +65,15 @@ class CodeQuality:
         except Exception:
             log.exception("gagal ambil commits")
             commits = []
-        for c in commits:
+        # GitLab returns newest first. On a long-lived branch seen for the first time, only the newest
+        # commits are checked so one MR can't trigger hundreds of API calls and comments.
+        max_commits = int(self.cfg.get("max_commits_per_run", 30))
+        for n, c in enumerate(commits):
             csha = c.get("id")
             if not csha or self.store.kv_get(f"cq_commit:{pid}:{csha}"):
+                continue
+            if n >= max_commits:
+                self.store.kv_set(f"cq_commit:{pid}:{csha}", "skip")
                 continue
             if len(c.get("parent_ids") or []) > 1:  # merge commit
                 self.store.kv_set(f"cq_commit:{pid}:{csha}", "skip")
@@ -96,7 +105,8 @@ class CodeQuality:
                 ai_vs, ai_note = self._ai_check(mr, diffs)
                 if not dry:
                     posted += self._post_ai_inline(mr, ai_vs)
-                self.store.kv_set(cache_key, len(ai_vs))
+                if not ai_note:  # only cache a successful check; a failed one is retried next time
+                    self.store.kv_set(cache_key, len(ai_vs))
             else:
                 ai_vs = [v for v in self.store.mr_violations(key) if v.get("source") == "ai"]
         current = sort_violations(current + ai_vs)
@@ -186,11 +196,12 @@ class CodeQuality:
                                   language=llm.get("language", "Indonesia"),
                                   standards=self.std.documents(stacks)[:30000])
         try:
-            raw, _ = self.ai.complete(system, f"Judul MR: {mr.get('title')}\n" + "".join(chunks), "standards")
+            raw, _ = self.ai.complete(system, f"Judul MR: {mr.get('title')}\n" + "".join(chunks), "standards",
+                                      validate=extract_json)
             data = extract_json(raw)
         except Exception as ex:
-            log.exception("AI standards check gagal")
-            return [], f"Cek AI gagal: {ex}"
+            log.warning("AI standards check gagal: %s", short_error(ex))
+            return [], f"Cek AI gagal: {short_error(ex)}"
         out = []
         min_conf = self.cfg.get("ai_min_confidence", "high")
         rank = {"high": 0, "medium": 1, "low": 2}
@@ -258,11 +269,16 @@ class CodeQuality:
             return  # nothing to say, don't spam a "clean" note
         try:
             if note_id:
-                self.gl.edit_note(pid, iid, note_id, body)
-            else:
-                self.store.kv_set(k, self.gl.add_note(pid, iid, body)["id"])
-        except Exception:
-            log.exception("gagal update ringkasan MR")
+                try:
+                    self.gl.edit_note(pid, iid, note_id, body)
+                    return
+                except requests.HTTPError as ex:
+                    if ex.response is None or ex.response.status_code not in (403, 404):
+                        raise
+                    log.info("Komentar ringkasan lama tidak ada lagi (dihapus?), buat baru")
+            self.store.kv_set(k, self.gl.add_note(pid, iid, body)["id"])
+        except Exception as ex:
+            log.warning("gagal update ringkasan MR: %s", short_error(ex))
 
     def _set_status(self, pid, sha, mr, counts):
         fail_on = self.report.get("status_fail_on", "none")  # none | error | warning

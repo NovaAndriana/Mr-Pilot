@@ -24,7 +24,11 @@ class Store:
         self.db = sqlite3.connect(path, timeout=15, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         if path != ":memory:":
-            self.db.execute("PRAGMA journal_mode=WAL")
+            # Rollback journal, not WAL: WAL needs shared-memory mmap that fails on some bind mounts
+            # (Docker Desktop on Windows/macOS, network drives). One process writes, so WAL gains little.
+            self.db.execute("PRAGMA journal_mode=DELETE")
+            self.db.execute("PRAGMA synchronous=FULL")
+            self.db.execute("PRAGMA busy_timeout=15000")
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS mrs(
                 key TEXT PRIMARY KEY, project_id INTEGER, iid INTEGER, sha TEXT,
@@ -172,6 +176,26 @@ class Store:
             errs = self.db.execute("SELECT provider, task, ts, error FROM ai_calls WHERE ok=0 AND ts>=? "
                                    "ORDER BY ts DESC LIMIT 15", (since,)).fetchall()
         return {"by_provider": [dict(r) for r in rows], "recent_errors": [dict(r) for r in errs]}
+
+    # -------------------------------------------------------------- upkeep
+    def prune(self, events_days=90, ai_days=90, violations_days=365):
+        """Retention so the database doesn't grow forever. Returns rows deleted."""
+        now = time.time()
+        n = 0
+        with self.lock:
+            for sql, days in (("DELETE FROM events WHERE ts < ?", events_days),
+                              ("DELETE FROM ai_calls WHERE ts < ?", ai_days),
+                              ("DELETE FROM violations WHERE scope='commit' AND ts < ?", violations_days)):
+                n += self.db.execute(sql, (now - days * 86400,)).rowcount
+            # reject prompts that were never answered
+            n += self.db.execute("DELETE FROM kv WHERE k LIKE 'reject:%' AND rowid NOT IN "
+                                 "(SELECT rowid FROM kv WHERE k LIKE 'reject:%' ORDER BY rowid DESC LIMIT 50)").rowcount
+            self.db.commit()
+        return n
+
+    def integrity_ok(self):
+        with self.lock:
+            return self.db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
 
     # ------------------------------------------------------------- dashboard
     def query(self, sql, params=()):

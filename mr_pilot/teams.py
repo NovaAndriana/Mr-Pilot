@@ -1,9 +1,16 @@
 """Send the 'already merged' note to Teams as the user, via a Power Automate flow."""
 import html
+import logging
 import random
 import re
+import time
 
 import requests
+
+from .util import short_error
+
+log = logging.getLogger("mr_pilot.teams")
+DEFAULT_TEMPLATE = "MR {ref} ({title}) sudah saya merge ke {target_branch}."
 
 _JIRA = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
 
@@ -38,7 +45,12 @@ def build_context(mr):
 
 
 def render(template, ctx):
-    text = template.format_map(_Safe(ctx))
+    try:
+        text = str(template).format_map(_Safe(ctx))
+    except (ValueError, KeyError, IndexError, AttributeError) as ex:
+        # salah ketik di template (mis. "{title" atau "{a.b}") tidak boleh menggagalkan proses setelah merge
+        log.warning("Template Teams tidak valid (%s): %r. Pakai template bawaan.", ex, template)
+        text = DEFAULT_TEMPLATE.format_map(_Safe(ctx))
     text = re.sub(r"\(\s*\)", "", text)
     text = re.sub(r"[ \t]{2,}", " ", text)
     return text.strip()
@@ -49,8 +61,8 @@ class Teams:
         self.cfg = cfg["teams"]
 
     def compose(self, mr):
-        templates = self.cfg.get("templates") or ["MR {ref} sudah saya merge ke {target_branch}."]
-        return render(random.choice(templates), build_context(mr))
+        templates = [t for t in (self.cfg.get("templates") or []) if isinstance(t, str) and t.strip()]
+        return render(random.choice(templates) if templates else DEFAULT_TEMPLATE, build_context(mr))
 
     def notify_merged(self, mr):
         """Returns (status, text). status: sent | copy | off | 'gagal: ...'"""
@@ -63,10 +75,20 @@ class Teams:
         payload = {"text": text,
                    "text_html": html.escape(text).replace("\n", "<br>"),
                    "mr_url": mr.get("web_url", ""), "mr_title": mr.get("title", "")}
-        try:
-            r = requests.post(self.cfg["webhook_url"], json=payload, timeout=30)
+        last = ""
+        for attempt in range(2):  # retry once only when the flow clearly did not accept the message
+            try:
+                r = requests.post(self.cfg["webhook_url"], json=payload, timeout=30)
+            except requests.ConnectionError as ex:
+                last = short_error(ex)
+                time.sleep(2)
+                continue
+            except Exception as ex:  # timeout: may have been delivered, don't risk a duplicate post
+                return f"gagal: {short_error(ex)}", text
             if r.status_code in (200, 201, 202):
                 return "sent", text
-            return f"gagal: HTTP {r.status_code}", text
-        except Exception as e:
-            return f"gagal: {e}", text
+            last = f"HTTP {r.status_code}"
+            if r.status_code not in (429, 500, 502, 503, 504):
+                break
+            time.sleep(3)
+        return f"gagal: {last}", text

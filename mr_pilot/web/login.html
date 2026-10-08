@@ -30,7 +30,11 @@
     <div class="err" id="err">Password salah. Password diambil dari <code>DASHBOARD_PASSWORD</code> di <code>data/.env</code>
       saat MR Pilot dinyalakan. Setelah mengubahnya, jalankan <code>setup.bat restart</code>.
       Lihat password aktif: <code>setup.bat password</code>.</div>
+    <div class="err" id="err2">Terlalu banyak percobaan password salah. Tunggu 15 menit lalu coba lagi.</div>
   </form>
-  <script>if (location.search.includes("e=1")) document.getElementById("err").style.display = "block";</script>
+  <script>
+    if (location.search.includes("e=1")) document.getElementById("err").style.display = "block";
+    if (location.search.includes("e=2")) document.getElementById("err2").style.display = "block";
+  </script>
 </body>
 </html>

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Dijalankan di SERVER oleh pipeline CI (GitHub Actions / GitLab CI) lewat SSH.
-# Env: IMAGE (wajib), REGISTRY, REGISTRY_USER, REGISTRY_PASSWORD (opsional, untuk image private)
+# Env : IMAGE (wajib), REGISTRY, REGISTRY_USER (opsional, untuk image private)
+# Stdin: password registry (opsional) -> tidak pernah muncul di argumen proses / `ps`.
+# Kalau image baru tidak sehat dalam 3 menit, otomatis kembali ke image sebelumnya.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -15,30 +17,68 @@ if [ ! -f data/config.yaml ] || [ ! -f data/.env ]; then
   exit 1
 fi
 
+REGISTRY_PASSWORD=""
+if [ ! -t 0 ]; then IFS= read -r REGISTRY_PASSWORD || true; fi
+
 touch .env
-set_kv() { if grep -q "^$1=" .env; then sed -i "s|^$1=.*|$1=$2|" .env; else echo "$1=$2" >> .env; fi; }
+get_kv() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- || true; }
+set_kv() {
+  local tmp; tmp=$(mktemp)
+  grep -v -E "^$1=" .env > "$tmp" || true
+  printf '%s=%s\n' "$1" "$2" >> "$tmp"
+  cat "$tmp" > .env && rm -f "$tmp"
+}
+
+PREV_IMAGE=$(get_kv MRP_IMAGE)
 set_kv MRP_IMAGE "$IMAGE"
-grep -q '^MRP_UID=' .env || set_kv MRP_UID "$(id -u)"
-grep -q '^MRP_GID=' .env || set_kv MRP_GID "$(id -g)"
+[ -n "$(get_kv MRP_UID)" ] || set_kv MRP_UID "$(id -u)"
+[ -n "$(get_kv MRP_GID)" ] || set_kv MRP_GID "$(id -g)"
 mkdir -p data/home
 
-if [ -n "${REGISTRY_PASSWORD:-}" ]; then
-  echo "$REGISTRY_PASSWORD" | docker login "${REGISTRY:-ghcr.io}" -u "${REGISTRY_USER:-ci}" --password-stdin >/dev/null
+cleanup() { if [ -n "$REGISTRY_PASSWORD" ]; then docker logout "${REGISTRY:-ghcr.io}" >/dev/null 2>&1 || true; fi; }
+trap cleanup EXIT
+
+if [ -n "$REGISTRY_PASSWORD" ]; then
+  printf '%s' "$REGISTRY_PASSWORD" | docker login "${REGISTRY:-ghcr.io}" -u "${REGISTRY_USER:-ci}" --password-stdin >/dev/null
 fi
+
+wait_healthy() {
+  # Docker HEALTHCHECK = heartbeat loop utama MR Pilot (python -m mr_pilot health)
+  local cid st i
+  echo -n "==> menunggu sehat "
+  for i in $(seq 1 90); do
+    cid=$($DC ps -q mr-pilot 2>/dev/null || true)
+    if [ -n "$cid" ]; then
+      st=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || echo "?")
+      case "$st" in
+        healthy) echo " OK"; return 0 ;;
+        unhealthy|exited|dead) echo " $st"; return 1 ;;
+      esac
+      if [ "$(docker inspect -f '{{.RestartCount}}' "$cid" 2>/dev/null || echo 0)" -ge 3 ]; then
+        echo " restart berulang"; return 1
+      fi
+    fi
+    echo -n "."; sleep 2
+  done
+  echo " timeout"; return 1
+}
 
 echo "==> pull $IMAGE"
 $DC pull mr-pilot
 echo "==> up"
 $DC up -d --remove-orphans
 
-PORT=$(grep -E '^MRP_PORT=' .env | cut -d= -f2); PORT=${PORT:-8787}
-echo -n "==> health "
-for i in $(seq 1 30); do
-  if curl -fs "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then echo "OK"; break; fi
-  if [ "$i" = 30 ]; then echo "GAGAL"; $DC logs --tail 50 mr-pilot; exit 1; fi
-  echo -n "."; sleep 2
-done
+if ! wait_healthy; then
+  echo "==> image baru tidak sehat. Log terakhir:"
+  $DC logs --tail 80 mr-pilot || true
+  if [ -n "$PREV_IMAGE" ] && [ "$PREV_IMAGE" != "$IMAGE" ]; then
+    echo "==> rollback ke $PREV_IMAGE"
+    set_kv MRP_IMAGE "$PREV_IMAGE"
+    $DC up -d --remove-orphans
+    wait_healthy || echo "!! rollback juga belum sehat, cek server secara manual"
+  fi
+  exit 1
+fi
 
-[ -n "${REGISTRY_PASSWORD:-}" ] && docker logout "${REGISTRY:-ghcr.io}" >/dev/null 2>&1 || true
 docker image prune -f >/dev/null 2>&1 || true
 echo "==> deploy selesai: $IMAGE"

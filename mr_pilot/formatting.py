@@ -18,8 +18,9 @@ MAX_LEN = 3900
 Q_ICON = {"error": "❌", "warning": "⚠️", "info": "ℹ️"}
 
 
-def e(s):
-    return html.escape(str(s or ""), quote=False)
+def e(s, attr=False):
+    """HTML-escape for Telegram. attr=True also escapes quotes (for href="...")."""
+    return html.escape("" if s is None else str(s), quote=attr)
 
 
 def mr_ref(mr):

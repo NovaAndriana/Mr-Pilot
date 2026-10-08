@@ -24,6 +24,7 @@ DEFAULTS = {
         "allowed_user_ids": [],
         "proxy": "",
         "startup_message": True,
+        "api_base": "https://api.telegram.org",
     },
     "review": {
         "mode": "bot_then_llm",  # llm | bot | bot_then_llm
@@ -214,15 +215,64 @@ def load_config(path="config.yaml"):
     if not os.path.isabs(sd):
         cfg["code_quality"]["standards_dir"] = os.path.join(base_dir, sd)
 
-    t = cfg["telegram"]
-    t["chat_id"] = int(t["chat_id"] or 0)
-    t["allowed_user_ids"] = [int(x) for x in (t["allowed_user_ids"] or [t["chat_id"]]) if x]
-
-    if cfg["review"]["mode"] not in ("llm", "bot", "bot_then_llm"):
-        raise ValueError("review.mode harus llm | bot | bot_then_llm")
-    if cfg["teams"]["mode"] not in ("power_automate", "telegram_copy", "off"):
-        raise ValueError("teams.mode harus power_automate | telegram_copy | off")
+    validate(cfg)
     return cfg
+
+
+class ConfigError(ValueError):
+    pass
+
+
+def _int(cfg, dotted, lo=None, hi=None):
+    node, parts = cfg, dotted.split(".")
+    for p in parts[:-1]:
+        node = node[p]
+    v = node.get(parts[-1])
+    try:
+        v = int(str(v).strip() or 0) if not isinstance(v, bool) else int(v)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{dotted} harus angka, sekarang: {v!r}") from None
+    if lo is not None and v < lo:
+        v = lo
+    if hi is not None and v > hi:
+        v = hi
+    node[parts[-1]] = v
+    return v
+
+
+def validate(cfg):
+    """Normalise types and reject values that would only fail later at runtime."""
+    t = cfg["telegram"]
+    try:
+        t["chat_id"] = int(str(t["chat_id"] or 0).strip())
+        t["allowed_user_ids"] = [int(str(x).strip()) for x in (t["allowed_user_ids"] or [t["chat_id"]]) if x]
+    except ValueError:
+        raise ConfigError("TELEGRAM_CHAT_ID / allowed_user_ids harus angka (chat id pribadi Anda). "
+                          "Jalankan `setup` untuk mendeteksinya otomatis.") from None
+    _int(cfg, "gitlab.poll_interval_seconds", lo=30, hi=3600)
+    _int(cfg, "dashboard.port", lo=1, hi=65535)
+    _int(cfg, "review.bot.wait_minutes", lo=0, hi=1440)
+    _int(cfg, "review.llm.max_diff_chars", lo=2000, hi=2_000_000)
+    _int(cfg, "ai.timeout", lo=10, hi=3600)
+    url = str(cfg["gitlab"].get("url") or "").strip().rstrip("/")
+    if url and not re.match(r"^https?://", url):
+        raise ConfigError(f"gitlab.url harus diawali https:// atau http://, sekarang: {url!r}")
+    if url.endswith("/api/v4"):
+        url = url[: -len("/api/v4")]
+    cfg["gitlab"]["url"] = url
+    if cfg["review"]["mode"] not in ("llm", "bot", "bot_then_llm"):
+        raise ConfigError("review.mode harus llm | bot | bot_then_llm")
+    if cfg["teams"]["mode"] not in ("power_automate", "telegram_copy", "off"):
+        raise ConfigError("teams.mode harus power_automate | telegram_copy | off")
+    if cfg["code_quality"]["report"].get("status_fail_on", "none") not in ("none", "error", "warning"):
+        raise ConfigError("code_quality.report.status_fail_on harus none | error | warning")
+    for k in ("gitlab.verify_ssl", "code_quality.enabled", "dashboard.enabled"):
+        a, b = k.split(".")
+        v = cfg[a][b]
+        if isinstance(v, str):
+            cfg[a][b] = v.strip().lower() in ("true", "1", "yes", "on")
+    if not isinstance(cfg["gitlab"].get("projects") or [], list):
+        raise ConfigError("gitlab.projects harus daftar, mis. [\"grup/repo\"]")
 
 
 def require(cfg, *keys):

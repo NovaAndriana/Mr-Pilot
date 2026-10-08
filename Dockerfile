@@ -33,8 +33,9 @@ COPY config.example.yaml .env.example docker-compose.yml ./
 
 VOLUME ["/data"]
 EXPOSE 8787
-HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-  CMD curl -fs http://127.0.0.1:8787/healthz >/dev/null || test ! -f /data/config.yaml || exit 1
+# healthy = main loop wrote its heartbeat recently (works with or without the dashboard)
+HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=3 \
+  CMD ["python", "-m", "mr_pilot", "health"]
 
 ENTRYPOINT ["tini", "--", "python", "-m", "mr_pilot"]
 CMD ["run"]

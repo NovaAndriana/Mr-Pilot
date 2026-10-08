@@ -18,6 +18,7 @@ telegram:
   allowed_user_ids: []            # kosong = hanya chat_id di atas yang boleh tap tombol
   proxy: ""                       # isi jika jaringan kantor perlu proxy, mis. http://proxy:8080
   startup_message: true
+  api_base: ${TELEGRAM_API_BASE:-https://api.telegram.org}   # ganti hanya jika memakai Bot API server sendiri
 
 review:
   # llm          = selalu review pakai API AI
@@ -119,7 +120,7 @@ code_quality:
 dashboard:
   enabled: true
   host: ${DASHBOARD_HOST:-127.0.0.1}   # 0.0.0.0 agar bisa dibuka dari HP/laptop lain (otomatis di Docker)
-  port: 8787
+  port: ${DASHBOARD_PORT:-8787}
   password: ${DASHBOARD_PASSWORD} # wajib jika host bukan 127.0.0.1
   public_url: ${DASHBOARD_PUBLIC_URL:-}   # mis. http://pc-nova:8787, dipakai sebagai link di status commit
 

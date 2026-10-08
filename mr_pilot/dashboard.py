@@ -17,12 +17,13 @@ from urllib.parse import parse_qs, urlparse
 import yaml
 
 from .standards import Standards
+from .util import redact
 
 log = logging.getLogger("mr_pilot.dashboard")
 
 ACTIVE = ("notified", "waiting_bot", "error", "merging")
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
-_FILE_RE = re.compile(r"^[A-Za-z0-9_.-]+\.(md|ya?ml)$")
+_FILE_RE = re.compile(r"^(?!\.)[A-Za-z0-9_.-]{1,80}\.(md|ya?ml)$")
 
 
 def _iso_ts(s):
@@ -229,6 +230,10 @@ class StandardsFiles:
     def save(self, name, content):
         if not _FILE_RE.match(name or ""):
             return 400, {"error": "Nama file harus berakhiran .md atau .yaml, tanpa folder."}
+        if not isinstance(content, str):
+            return 400, {"error": "Isi file harus teks."}
+        if len(content) > 1_000_000:
+            return 400, {"error": "Isi file terlalu besar (maks 1 MB)."}
         if name.endswith((".yaml", ".yml")):
             errs = validate_rules_yaml(content)
             if errs:
@@ -240,10 +245,19 @@ class StandardsFiles:
                 old = f.read()
             with open(path + ".bak", "w", encoding="utf-8") as f:
                 f.write(old)
+        mode = (os.stat(path).st_mode & 0o777) if os.path.exists(path) else 0o644
         fd, tmp = tempfile.mkstemp(dir=self.dir, suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-            f.write(content)
-        os.replace(tmp, path)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                f.write(content)
+            os.chmod(tmp, mode)  # mkstemp makes 0600: keep the file readable/editable from the host
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
         return 200, {"ok": True, "name": name, "mtime": os.path.getmtime(path)}
 
     def test(self, path, code):
@@ -302,6 +316,27 @@ class Dashboard:
         self.files = StandardsFiles(cfg)
         self.store = store
         self.httpd = None
+        self.failed = {}            # ip -> [timestamps of failed logins]
+        self.fail_lock = threading.Lock()
+
+    LOCK_MAX, LOCK_WINDOW = 10, 900  # 10 wrong passwords per 15 minutes per address
+
+    def locked_out(self, ip):
+        now = time.time()
+        with self.fail_lock:
+            hits = [t for t in self.failed.get(ip, []) if now - t < self.LOCK_WINDOW]
+            self.failed[ip] = hits
+            return len(hits) >= self.LOCK_MAX
+
+    def note_failure(self, ip):
+        with self.fail_lock:
+            self.failed.setdefault(ip, []).append(time.time())
+            if len(self.failed) > 1000:  # bound memory
+                self.failed = dict(list(self.failed.items())[-500:])
+
+    def clear_failures(self, ip):
+        with self.fail_lock:
+            self.failed.pop(ip, None)
 
     # sessions are stateless HMAC tokens: "<expiry>.<sig>"
     def make_token(self, ttl=7 * 86400):
@@ -323,7 +358,16 @@ class Dashboard:
 
         class Handler(_Handler):
             app = dash
-        self.httpd = ThreadingHTTPServer((self.host, self.port), Handler)
+        delay = 2
+        while True:  # port still held (old instance shutting down, another app): keep trying, don't die silently
+            try:
+                self.httpd = ThreadingHTTPServer((self.host, self.port), Handler)
+                break
+            except OSError as ex:
+                log.error("Dashboard tidak bisa memakai port %s (%s). Coba lagi %ss lagi; ubah DASHBOARD_PORT "
+                          "kalau port dipakai aplikasi lain.", self.port, ex.strerror or ex, delay)
+                time.sleep(delay)
+                delay = min(delay * 2, 60)
         self.httpd.daemon_threads = True
         log.info("Dashboard: http://%s:%s", self.host, self.port)
         self.httpd.serve_forever()
@@ -342,6 +386,13 @@ class _Handler(BaseHTTPRequestHandler):
         log.debug("http %s", fmt % args)
 
     # ---------------------------------------------------------------- utils
+    def _qint(self, q, name, default, lo, hi):
+        try:
+            v = int((q.get(name) or [str(default)])[0])
+        except ValueError:
+            v = default
+        return max(lo, min(v, hi))
+
     def _send(self, code, body, ctype="application/json; charset=utf-8", headers=None):
         if not isinstance(body, (bytes, bytearray)):
             body = json.dumps(body, ensure_ascii=False, default=str).encode() if "json" in ctype else body.encode()
@@ -351,6 +402,13 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        if ctype.startswith("text/html"):
+            self.send_header("Content-Security-Policy",
+                             "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                             "font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self' data:; "
+                             "frame-ancestors 'none'; form-action 'self'; base-uri 'none'")
         for k, v in (headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -364,10 +422,16 @@ class _Handler(BaseHTTPRequestHandler):
         return self.app.check_token(self._cookie())
 
     def _json_body(self):
-        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise ValueError("Content-Length tidak valid") from None
         if n > 2_000_000:
             raise ValueError("terlalu besar")
-        return json.loads(self.rfile.read(n) or b"{}")
+        data = json.loads(self.rfile.read(n) or b"{}")
+        if not isinstance(data, dict):
+            raise ValueError("Body harus objek JSON")
+        return data
 
     def _static(self, name, ctype):
         with open(os.path.join(WEB_DIR, name), "rb") as f:
@@ -380,7 +444,12 @@ class _Handler(BaseHTTPRequestHandler):
         if u.path == "/login":
             return self._static("login.html", "text/html; charset=utf-8")
         if u.path == "/healthz":
-            return self._send(200, {"ok": True})
+            from . import __version__
+            hb = float(self.app.store.kv_get("heartbeat", 0) or 0)
+            age = round(time.time() - hb, 1) if hb else None
+            alive = age is not None and age < int(os.environ.get("MRP_HEALTH_MAX_AGE", "600"))
+            # 503 until the bot loop is really running (setup waits on this), 200 afterwards
+            return self._send(200 if alive else 503, {"ok": alive, "version": __version__, "loop_age": age})
         if not self._authed():
             if u.path.startswith("/api/"):
                 return self._send(401, {"error": "login"})
@@ -391,31 +460,41 @@ class _Handler(BaseHTTPRequestHandler):
             if u.path == "/api/summary":
                 return self._send(200, self.app.data.summary())
             if u.path == "/api/quality":
-                return self._send(200, self.app.data.quality(int((q.get("days") or ["30"])[0])))
+                return self._send(200, self.app.data.quality(self._qint(q, "days", 30, 1, 365)))
             if u.path == "/api/mr":
                 d = self.app.data.mr_detail((q.get("key") or [""])[0])
                 return self._send(200 if d else 404, d or {"error": "tidak ditemukan"})
             if u.path == "/api/events":
-                after = int((q.get("after") or ["0"])[0])
-                return self._send(200, self.app.store.events_after(after, int((q.get("limit") or ["200"])[0])))
+                return self._send(200, self.app.store.events_after(self._qint(q, "after", 0, 0, 2 ** 62),
+                                                                   self._qint(q, "limit", 200, 1, 1000)))
             if u.path == "/api/standards":
                 return self._send(200, self.app.files.list())
             if u.path == "/api/ai":
                 return self._send(200, {**self.app.ai.describe(), "stats": self.app.store.ai_stats(7)})
             if u.path == "/api/stream":
-                return self._stream(int((q.get("after") or ["0"])[0]))
+                return self._stream(self._qint(q, "after", 0, 0, 2 ** 62))
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except Exception as ex:
             log.exception("dashboard GET %s", u.path)
-            return self._send(500, {"error": str(ex)})
+            return self._send(500, {"error": redact(str(ex))[:300]})
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
         u = urlparse(self.path)
         if u.path == "/login":
-            n = int(self.headers.get("Content-Length") or 0)
-            form = parse_qs(self.rfile.read(n).decode())
+            ip = self.client_address[0]
+            if self.app.locked_out(ip):
+                log.warning("Login dashboard diblokir sementara untuk %s (terlalu banyak percobaan)", ip)
+                return self._send(302, b"", headers={"Location": "/login?e=2"})
+            try:
+                n = min(int(self.headers.get("Content-Length") or 0), 8192)
+            except ValueError:
+                n = 0
+            form = parse_qs(self.rfile.read(n).decode("utf-8", "replace"))
             pw = (form.get("password") or [""])[0]
             if self.app.password and hmac.compare_digest(pw.encode(), self.app.password.encode()):
+                self.app.clear_failures(ip)
                 tok = self.app.make_token()
                 return self._send(302, b"", headers={
                     "Location": "/",
@@ -425,6 +504,7 @@ class _Handler(BaseHTTPRequestHandler):
                 hint = " (beda spasi di awal/akhir)"
             elif len(pw) != len(self.app.password):
                 hint = " (panjangnya berbeda)"
+            self.app.note_failure(ip)
             log.warning("Login dashboard gagal%s. Password aktif = DASHBOARD_PASSWORD di %s saat MR Pilot "
                         "terakhir dinyalakan; cek dengan perintah `password`.", hint, self.app.env_path)
             time.sleep(1)
@@ -461,12 +541,15 @@ class _Handler(BaseHTTPRequestHandler):
                 try:
                     return self._send(200, {"models": self.app.ai.list_models(body.get("name"))})
                 except Exception as ex:
-                    return self._send(200, {"models": [], "error": str(ex)[:300]})
+                    return self._send(200, {"models": [], "error": redact(ex)[:300]})
             if method == "POST" and u.path == "/api/standards/test":
                 return self._send(200, self.app.files.test(body.get("path"), body.get("code")))
+        except (ValueError, TypeError, KeyError) as ex:  # bad input from the form: answer 400, no traceback
+            log.warning("dashboard %s %s ditolak: %s", method, u.path, redact(ex))
+            return self._send(400, {"error": redact(ex)[:300]})
         except Exception as ex:
             log.exception("dashboard %s %s", method, u.path)
-            return self._send(400, {"error": str(ex)})
+            return self._send(500, {"error": redact(ex)[:300]})
         self._send(404, {"error": "not found"})
 
     def _stream(self, after):

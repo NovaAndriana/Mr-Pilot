@@ -150,7 +150,11 @@ case "$CMD" in
     ensure_docker
     if [ "$PW_RESET" = 1 ]; then dc run --rm -T mr-pilot password --reset && dc restart mr-pilot && wait_healthy || true
     else dc run --rm -T mr-pilot password; fi ;;
-  config) ensure_docker; dc run --rm mr-pilot setup ;;
+  config) ensure_docker
+          # stop the running bot first: the wizard polls the same Telegram bot (409) and rewrites .env
+          dc stop mr-pilot >/dev/null 2>&1 || true
+          dc run --rm mr-pilot setup
+          dc up -d mr-pilot && wait_healthy ;;
   shell) ensure_docker; dc exec mr-pilot bash ;;
   demo) ensure_docker; dc build >/dev/null; echo "Dashboard demo: http://127.0.0.1:${PORT:-8788}  (password: demo, Ctrl+C untuk berhenti)"
         dc run --rm -p "127.0.0.1:${PORT:-8788}:8787" mr-pilot demo ;;
