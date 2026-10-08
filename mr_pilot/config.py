@@ -13,9 +13,10 @@ DEFAULTS = {
         "token": "",
         "username": "",
         "verify_ssl": True,
-        "poll_interval_seconds": 120,
+        "poll_interval_seconds": 60,
         "skip_draft": True,
-        "also_assigned_to_me": False,
+        "watch": ["reviewer", "assignee"],  # MR masuk Telegram kalau Anda reviewer DAN/ATAU assignee
+        "also_assigned_to_me": None,        # lama, digantikan `watch`
         "projects": [],
     },
     "telegram": {
@@ -271,6 +272,13 @@ def validate(cfg):
         v = cfg[a][b]
         if isinstance(v, str):
             cfg[a][b] = v.strip().lower() in ("true", "1", "yes", "on")
+    w = cfg["gitlab"].get("watch")
+    if isinstance(w, str):
+        w = [x.strip() for x in w.split(",")]
+    w = [str(x).strip().lower() for x in (w or []) if str(x).strip()]
+    if not w or any(x not in ("reviewer", "assignee") for x in w):
+        raise ConfigError("gitlab.watch harus berisi reviewer dan/atau assignee, mis. [reviewer, assignee]")
+    cfg["gitlab"]["watch"] = w
     if not isinstance(cfg["gitlab"].get("projects") or [], list):
         raise ConfigError("gitlab.projects harus daftar, mis. [\"grup/repo\"]")
 

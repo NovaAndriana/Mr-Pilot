@@ -86,6 +86,22 @@ class App:
         if not self._critical:
             raise Stop()
 
+    def watch(self):
+        w = self.cfg["gitlab"].get("watch") or ["reviewer", "assignee"]
+        if self.cfg["gitlab"].get("also_assigned_to_me") and "assignee" not in w:
+            w = list(w) + ["assignee"]
+        return w
+
+    def my_roles(self, mr):
+        """Which watched roles I have on this MR: ['Reviewer', 'Assignee']."""
+        me, w, roles = self.username, self.watch(), []
+        if "reviewer" in w and any(r.get("username") == me for r in (mr.get("reviewers") or [])):
+            roles.append("Reviewer")
+        if "assignee" in w and (any(a.get("username") == me for a in (mr.get("assignees") or []))
+                                or (mr.get("assignee") or {}).get("username") == me):
+            roles.append("Assignee")
+        return roles
+
     def ensure_user(self):
         if not self.username:
             self.username = self.gl.me()["username"]
@@ -236,7 +252,7 @@ class App:
     def poll_gitlab(self):
         g = self.cfg["gitlab"]
         me = self.ensure_user()
-        mrs = self.gl.list_review_mrs(me, also_assigned=g.get("also_assigned_to_me"))
+        mrs = self.gl.list_review_mrs(me, watch=self.watch())
         projects = set(g.get("projects") or [])
         seen = set()
         for m in mrs:
@@ -297,6 +313,13 @@ class App:
         if review is None:
             if not rec or rec.get("status") != "waiting_bot" or not same_sha:
                 self.event("waiting", f"!{iid} menunggu komentar bot review", "", key)
+                # tell the lead right away; the full card follows when the bot review is in
+                roles = self.my_roles(mr)
+                self.safe_send(f"🕒 <b>MR {'diperbarui' if rec and not same_sha else 'baru'}</b> "
+                               f"<a href=\"{e(mr.get('web_url'), True)}\">!{iid}</a> {e(mr.get('title'))}\n"
+                               f"👤 {e(base['author'])}" + (f" · Anda: {e(', '.join(roles))}" if roles else "")
+                               + f"\n<i>Menunggu komentar bot AI review (maks {int(self.cfg['review']['bot']['wait_minutes'])}"
+                               f" menit). Kartu dengan tombol Merge/Tolak menyusul.</i>")
             self.store.upsert(key, status="waiting_bot", **base)
             log.info("MR %s menunggu komentar bot review", key)
             return
@@ -316,6 +339,9 @@ class App:
         if header is None:
             is_update = bool(rec and rec.get("tg_msg_id") and not same_sha)
             header = "🔄 MR diperbarui (ada commit baru)" if is_update else "🔔 MR baru untuk direview"
+            roles = self.my_roles(mr)
+            if roles:
+                header += f" · Anda: {', '.join(roles)}"
         # retire the old Telegram card for this MR (buttons removed)
         if rec and rec.get("tg_msg_id") and rec.get("tg_text") and rec.get("status") not in ("notify_failed",):
             self.safe_edit(rec["tg_msg_id"], rec["tg_text"] + "\n\n<i>↪️ Diganti review terbaru di bawah.</i>")
@@ -349,11 +375,8 @@ class App:
                 continue
             state = mr.get("state")
             if state == "opened":
-                reviewers = {r.get("username") for r in (mr.get("reviewers") or [])}
-                assignees = {a.get("username") for a in (mr.get("assignees") or [])}
-                still_mine = self.username in reviewers or (
-                    self.cfg["gitlab"].get("also_assigned_to_me") and self.username in assignees)
-                if not still_mine and "reviewers" in mr:
+                still_mine = bool(self.my_roles(mr))
+                if not still_mine and ("reviewers" in mr or "assignees" in mr):
                     self.store.upsert(key, status="unassigned")
                     self.event("closed", f"!{rec['iid']} tidak lagi di-assign ke Anda", rec.get("title") or "", key)
                     self._finish_card(rec, "<i>ℹ️ Anda tidak lagi reviewer MR ini.</i>")

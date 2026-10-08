@@ -334,6 +334,8 @@ class Reviewer:
         bot = self.from_bot(mr)
         if bot:
             return bot
+        if mode == "bot_then_llm" and self.llm_available():
+            return self.from_llm(mr)  # bot comment not there yet: don't keep the lead waiting, review now
         waited = (time.time() - first_seen) / 60
         if waited < float(self.cfg["bot"]["wait_minutes"]):
             return None

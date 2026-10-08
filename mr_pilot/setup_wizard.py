@@ -76,14 +76,52 @@ def _q(v):
 
 
 # ------------------------------------------------------------ data folder
+# Lines of older config.yaml versions that were never changed by the user -> new defaults.
+_MIGRATIONS = [
+    (re.compile(r"^(\s*)poll_interval_seconds:\s*120\s*#\s*cek MR baru tiap 2 menit\s*$", re.M),
+     r"\1poll_interval_seconds: ${GITLAB_POLL_SECONDS:-60}   # cek MR baru tiap 1 menit (min 30)"),
+    (re.compile(r"^(\s*)also_assigned_to_me:\s*(false|true)\s*#.*$", re.M),
+     r"\1watch: [reviewer, assignee]     # kirim ke Telegram kalau Anda dijadikan Reviewer ATAU Assignee"),
+    (re.compile(r"^(\s*)# bot_then_llm = tunggu komentar bot; kalau tidak muncul dalam wait_minutes, pakai API AI\s*$",
+                re.M),
+     r"\1# bot_then_llm = pakai komentar bot kalau sudah ada; kalau belum, langsung review pakai API AI"),
+]
+
+
+def migrate_config(path):
+    """Upgrade untouched default lines of an older config.yaml in place (keeps a .bak). Returns changes."""
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            old = f.read()
+    except OSError:
+        return 0
+    new, n = old, 0
+    for rx, rep in _MIGRATIONS:
+        new, k = rx.subn(rep, new)
+        n += k
+    if n:
+        try:
+            with open(path + ".bak", "w", encoding="utf-8") as f:
+                f.write(old)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8", newline="") as f:
+                f.write(new)
+            os.replace(tmp, path)
+        except OSError:
+            return 0  # read-only mount: defaults in code still apply
+    return n
+
+
 def bootstrap_data_dir(data_dir):
-    """Create config.yaml, standards/ and home/ in the data folder if missing."""
+    """Create config.yaml, standards/ and home/ in the data folder if missing; upgrade old defaults."""
     os.makedirs(data_dir, exist_ok=True)
     created = []
     cfg = os.path.join(data_dir, "config.yaml")
     if not os.path.exists(cfg):
         shutil.copy(os.path.join(PKG_ROOT, "config.example.yaml"), cfg)
         created.append("config.yaml")
+    elif migrate_config(cfg):
+        created.append("config.yaml (diperbarui, salinan lama: config.yaml.bak)")
     std = os.path.join(data_dir, "standards")
     src_std = os.path.join(PKG_ROOT, "standards")
     if not os.path.exists(std) and os.path.isdir(src_std) and os.path.abspath(src_std) != os.path.abspath(std):

@@ -709,3 +709,75 @@ def test_26_dashboard_writes_and_bot_commands(w):
     st = wait(lambda: w.tg.find("Menunggu keputusan", n) or w.tg.find("Tidak ada MR", n), 15, "/status")
     assert "!530" not in w.tg.messages[st]["text"], "MR yang ditolak tidak boleh ada di /status"
     assert w.app.alive()
+
+
+def test_27_assignee_reviewer_added_later_and_draft(w):
+    """Every MR where Nova becomes Reviewer OR Assignee reaches Telegram on the next poll."""
+    # assignee only (not reviewer)
+    w.gl.add_mr(540, "feat: assignee only", "e5" * 20, reviewers=(), assignees=("nova.andriana",),
+                files={"a.go": GO_OK})
+    # reviewer + assignee at once: one card, not two
+    w.gl.add_mr(541, "feat: both roles", "e6" * 20, assignees=("nova.andriana",), files={"a.go": GO_OK})
+    # someone else's MR: no card
+    w.gl.add_mr(542, "feat: not mine", "e7" * 20, reviewers=("budi",), assignees=("budi",), files={"a.go": GO_OK})
+    n = len(w.tg.sent)
+    cek(w)
+    c540 = card(w, 540, n)
+    assert "Anda: Assignee" in w.tg.messages[c540]["text"]
+    c541 = card(w, 541, n)
+    assert "Anda: Reviewer, Assignee" in w.tg.messages[c541]["text"]
+    assert sum(1 for m in w.tg.sent[n:] if "!541" in w.tg.messages[m]["text"] and w.tg.buttons(m)) == 1
+    assert not any("!542" in t for t in w.tg.texts(n))
+    # Nova gets added to 542 later as assignee -> card on the next poll
+    w.gl.mrs[(7, 542)]["assignees"].append({"username": "nova.andriana"})
+    n = len(w.tg.sent)
+    cek(w)
+    card(w, 542, n)
+    # removed as assignee -> card closed; added back -> new card
+    w.gl.mrs[(7, 540)]["assignees"] = []
+    cek(w)
+    wait(lambda: "tidak lagi reviewer" in w.tg.messages[c540]["text"], 15, "kartu ditutup saat di-unassign")
+    w.gl.mrs[(7, 540)]["assignees"] = [{"username": "nova.andriana"}]
+    n = len(w.tg.sent)
+    cek(w)
+    card(w, 540, n)
+    # Draft is held back, then sent as soon as it is marked Ready
+    w.gl.add_mr(543, "feat: draft dulu", "e8" * 20, draft=True, files={"a.go": GO_OK})
+    n = len(w.tg.sent)
+    cek(w)
+    assert not any("!543" in t for t in w.tg.texts(n))
+    w.gl.mrs[(7, 543)]["draft"] = w.gl.mrs[(7, 543)]["work_in_progress"] = False
+    n = len(w.tg.sent)
+    cek(w)
+    card(w, 543, n)
+
+
+def test_28_polls_on_its_own_and_migrates_old_config(w):
+    """No /cek: the poll loop alone delivers the card (poll interval from config), and an old
+    config.yaml (also_assigned_to_me: false, 2-minute poll) is upgraded on start."""
+    cfgp = os.path.join(w.data, "config.yaml")
+    with open(cfgp, encoding="utf-8") as f:
+        s = f.read()
+    s = re.sub(r"(?m)^(\s*)poll_interval_seconds:.*$", r"\1poll_interval_seconds: 120      # cek MR baru tiap 2 menit", s)
+    s = re.sub(r"(?m)^(\s*)watch:.*$", r"\1also_assigned_to_me: false      # true = MR yang assignee-nya Anda juga ikut dicek", s)
+    with open(cfgp, "w", encoding="utf-8") as f:
+        f.write(s)
+    w.app.signal(signal.SIGTERM)
+    assert w.app.wait_exit(40) == 0
+    w.env["GITLAB_POLL_SECONDS"] = "30"
+    if MODE == "docker":
+        w.app.env["GITLAB_POLL_SECONDS"] = "30"
+    w.app.start()
+    wait(lambda: "cek tiap 30s" in w.app.log(), 60, "start dengan poll 30 detik")
+    assert "config.yaml (diperbarui" in w.app.log()
+    with open(cfgp, encoding="utf-8") as f:
+        s = f.read()
+    assert "watch: [reviewer, assignee]" in s and "also_assigned_to_me" not in s
+    assert os.path.exists(cfgp + ".bak")
+    time.sleep(2)  # let the first poll after start finish
+    w.gl.add_mr(550, "feat: tanpa cek manual", "f5" * 20, reviewers=(), assignees=("nova.andriana",),
+                files={"a.go": GO_OK})
+    n = len(w.tg.sent)
+    mid = wait(lambda: next((m for m in w.tg.sent[n:] if "!550" in w.tg.messages[m]["text"]
+                             and any("Merge" in b for b in w.tg.buttons(m))), None), 75, "kartu otomatis tanpa /cek")
+    assert "Anda: Assignee" in w.tg.messages[mid]["text"]

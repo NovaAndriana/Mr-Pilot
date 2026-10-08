@@ -7,9 +7,9 @@ gitlab:
   token: ${GITLAB_TOKEN}          # Personal Access Token scope: api
   username: ""                    # kosong = otomatis dari token
   verify_ssl: ${GITLAB_VERIFY_SSL:-true}   # false jika GitLab internal pakai self-signed cert
-  poll_interval_seconds: 120      # cek MR baru tiap 2 menit
-  skip_draft: true                # abaikan MR Draft
-  also_assigned_to_me: false      # true = MR yang assignee-nya Anda juga ikut dicek
+  poll_interval_seconds: ${GITLAB_POLL_SECONDS:-60}   # cek MR baru tiap 1 menit (min 30)
+  skip_draft: true                # MR Draft dilewati; dikirim begitu statusnya Ready
+  watch: [reviewer, assignee]     # kirim ke Telegram kalau Anda dijadikan Reviewer ATAU Assignee
   projects: []                    # contoh: ["idas/idas-repo-be"]; kosong = semua project
 
 telegram:
@@ -23,7 +23,8 @@ telegram:
 review:
   # llm          = selalu review pakai API AI
   # bot          = baca komentar bot "AI Code Review" yang sudah ada di MR
-  # bot_then_llm = tunggu komentar bot; kalau tidak muncul dalam wait_minutes, pakai API AI
+  # bot_then_llm = pakai komentar bot kalau sudah ada; kalau belum, langsung review pakai API AI
+  #                (menunggu bot hanya jika belum ada provider AI yang siap)
   mode: ${REVIEW_MODE:-bot_then_llm}
   bot:
     usernames: ["system"]         # username akun bot yang posting review di MR
