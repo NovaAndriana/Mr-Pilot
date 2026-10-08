@@ -50,7 +50,7 @@ def seed(store, now=None):
                      source_branch=f"feat/IDAS-{5300 + iid % 100}", target_branch="staging",
                      verdict=verdict, pipeline=pipe, mr_created_at=_iso(created),
                      review={"source": "llm", "verdict": verdict or "UNKNOWN",
-                             "summary": "Perubahan konsisten dengan deskripsi; perhatikan temuan di bawah." if verdict else "",
+                             "summary": "Perubahan konsisten dengan deskripsi; perhatikan temuan di bawah ini dengan teliti." if verdict else "",
                              "solves": "Endpoint balance-deduction sebelumnya hanya menampilkan total kuota, tidak per user.",
                              "changes": ["Response quota berubah dari array menjadi object per user",
                                          "Validasi workflow tanpa phases (422 wkfl_015)"],
@@ -86,7 +86,7 @@ def seed(store, now=None):
             store.db.execute(
                 "INSERT INTO violations(ts,mr_key,scope,sha,commit_sha,author,project,stack,rule,severity,source,path,line,message)"
                 " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (ts, "42:300", "commit", "c", csha, name, "idas/idas-repo-be", "go",
+                (ts, "42:300", "commit", "c", csha, name, "idas/idas-repo-be", "go", 
                  r, s, "rule", rnd.choice(FILES), rnd.randint(5, 400), m))
     store.db.commit()
     for i in range(170):
