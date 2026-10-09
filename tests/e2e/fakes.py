@@ -105,6 +105,7 @@ class FakeGitLab(Server):
         self.approvals = []
         self.merges = []
         self.deleted_branches = []
+        self.raw_requests = []
         self.note_seq = 1000
         self.merge_behaviour = {}  # (pid, iid) -> callable or None
         super().__init__(_GitLabHandler)
@@ -245,6 +246,21 @@ class _GitLabHandler(_Base):
                     if body.get("should_remove_source_branch", mr.get("force_remove_source_branch")):
                         f.deleted_branches.append(mr["source_branch"])
                     return self._json(200, dict(mr))
+            m = re.match(r"^/projects/(\d+)/repository/files/(.+)/raw$", p)
+            if m and method == "GET":
+                f.raw_requests.append((m.group(2), (q.get("ref") or [""])[0]))
+                for diffs in f.mr_diffs.values():
+                    for d in diffs:
+                        if d["new_path"] == m.group(2):
+                            text = "".join(ln[1:] + "\n" for ln in d["diff"].splitlines()[1:] if ln[:1] in "+ ")
+                            b = text.encode()
+                            self.send_response(200)
+                            self.send_header("Content-Type", "text/plain; charset=utf-8")
+                            self.send_header("Content-Length", str(len(b)))
+                            self.end_headers()
+                            self.wfile.write(b)
+                            return
+                return self._json(404, {"message": "404 File Not Found"})
             m = re.match(r"^/projects/(\d+)/repository/commits/([0-9a-f]+)/(diff|comments)$", p)
             if m:
                 if m.group(3) == "diff":

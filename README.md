@@ -58,8 +58,12 @@ setup.bat ci          ./setup.sh ci          pasang CI/CD + deploy otomatis (bag
 ```
 Opsi install: `--with-claude-code` (CLI Claude Code ikut dipasang di image), `--with-ollama[=model]` (AI lokal di Docker), `--port 8787`, `--non-interactive` (semua jawaban dari env, untuk otomasi).
 
-### 1a. Token GitLab
-GitLab → avatar → **Preferences → Access Tokens** → scope **`api`**, beri tanggal kedaluwarsa.
+### 1a. Token GitLab (cukup SATU token untuk semua repo)
+GitLab → avatar → **Preferences → Access Tokens** → **Add new token** → scope **`api`**, beri tanggal kedaluwarsa.
+
+Ini *Personal* Access Token: berlaku untuk **semua project tempat akun Anda menjadi member** (mis. AkuSign FE, AkuSign Mobile, Backend Suite, akusign/fe), jadi **tidak perlu token per repo**. Jangan pakai *Project Access Token* (token per repo): komentar, approve, dan merge akan tercatat atas nama akun bot project, bukan atas nama Anda.
+
+Mau membatasi ke repo tertentu saja? Isi `gitlab.projects` di `data/config.yaml`, mis. `["akusign/akusign-fe-version-2-0", "idas/backend-suite"]` (path persis seperti di URL GitLab). Kosong = semua repo yang meng-assign Anda.
 
 ### 1b. Bot Telegram
 Di Telegram chat **@BotFather** → `/newbot` → salin tokennya ke wizard.
@@ -86,6 +90,15 @@ python -m mr_pilot --dry-run    # cek MR tanpa kirim/merge apa pun
 ---
 
 ## 2. AI: provider, fallback, dan per tugas
+
+### Cara AI mereview (lebih teliti, lebih sedikit temuan palsu)
+1. **Konteks lengkap**: diff dengan nomor baris asli, isi lengkap file yang berubah (diambil dari commit MR), pesan commit, deskripsi MR, dan dokumen standar tim (`standards/*.md`). File kode direview lebih dulu daripada test/dokumen.
+2. **Checklist per stack**: kontrak API, security (authz/IDOR, injection, secret di log), Go (error diabaikan, nil, goroutine, transaksi), React/RN (hooks, promise, XSS), DB (migrasi, N+1, index), test.
+3. **Wajib bukti**: setiap temuan harus mengutip baris kodenya. Kutipan yang tidak ada di MR dianggap halusinasi: severity diturunkan dan ditandai *belum terbukti*. Nomor baris yang salah dikoreksi otomatis.
+4. **Second opinion**: temuan blocker/major dicek ulang oleh AI kedua yang skeptis; yang tidak terbukti dibuang (`review.llm.verify`, 1 panggilan AI tambahan hanya jika ada temuan berat).
+5. Kartu Telegram menampilkan risiko, `file:baris`, saran perbaikan (💡), penilaian test, dan pertanyaan untuk author. Logika yang berubah tanpa file test ikut ditandai.
+
+Model besar memberi hasil terbaik (Claude Sonnet, Gemini Pro/Flash). Model kecil/gratis tetap terbantu oleh pengecekan bukti di atas.
 
 Atur di **dashboard → AI**, atau lewat `.env` (wizard mengisinya).
 
@@ -208,6 +221,7 @@ Deploy di server menjalankan `deploy/remote-deploy.sh`: login registry (token di
 - Dashboard hanya bisa diakses dari PC itu sendiri, kecuali Anda membukanya ke jaringan dengan password.
 - Semua aksi tercatat di `logs/mr-pilot.log`. Status MR tersimpan di `mr_pilot.db` (hapus file ini untuk reset).
 - Token (Telegram, GitLab, API key AI, URL flow Teams) **disensor otomatis** dari log, dashboard, dan pesan error.
+- Tombol **Keluar** (ikon pintu, kanan atas dashboard) mencabut sesi di server, bukan sekadar menghapus cookie.
 - Login dashboard dikunci 15 menit setelah 10 kali salah dari alamat yang sama. Header CSP/anti-iframe aktif.
 
 ## 6a. Ketahanan (production)

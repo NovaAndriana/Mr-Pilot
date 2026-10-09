@@ -30,7 +30,7 @@ MODE = os.environ.get("E2E_MODE", "process")  # process | docker
 IMAGE = os.environ.get("E2E_IMAGE", "mr-pilot:e2e")
 PASSWORD = "e2e-Dashb0ard-pass"
 
-GO_BAD = ("func Get(id string) {\n+\tdata, _ := repo.Find(id)\n+\tfmt.Println(data)\n"
+GO_BAD = (" func Get(id string) {\n+\tdata, _ := repo.Find(id)\n+\tfmt.Println(data)\n"
           "+\tq := \"SELECT * FROM t WHERE id=\" + id\n+\treturn\n")
 GO_OK = "+func Sum(a, b int) int {\n+\treturn a + b\n+}\n"
 
@@ -278,7 +278,9 @@ def test_05_double_tap_after_merge_is_ignored(w):
 
 def test_06_request_changes_needs_confirmation(w):
     w.verdicts["fix: reject empty phases"] = {"verdict": "REQUEST_CHANGES",
-                                              "findings": [{"severity": "major", "title": "SQL injection"}]}
+                                              "findings": [{"severity": "blocker", "title": "Overflow",
+                                                            "file": "internal/y.go", "line": 2,
+                                                            "evidence": "return a + b"}]}
     w.gl.add_mr(381, "fix: reject empty phases", "b" * 40, files={"internal/y.go": GO_OK},
                 author=("Bima Saputra", "bima.s"))
     n = len(w.tg.sent)
@@ -813,3 +815,80 @@ def test_29_source_branch_kept_unless_chosen(w):
     w.tg.press(conf, w.tg.buttons(conf)[btn])
     wait(lambda: "Merged" in w.tg.messages[c562]["text"], 20, "merge 562")
     assert "feat/562" in w.gl.deleted_branches
+
+
+def test_30_smarter_review_context_evidence_and_second_pass(w):
+    """The AI gets line-numbered diff + full file + commits + team standards; a finding quoting code that
+    does not exist is marked unverified; the skeptical second pass removes a false positive."""
+    title = "feat: review pintar"
+    w.gl.add_mr(570, title, "b6" * 20, files={"internal/q/usecase.go": GO_BAD},
+                commit_msg="feat(IDAS-77): kuota per user")
+    seen = {}
+    old_reply = w.ai_b.reply
+
+    def reply(payload):
+        system, user = payload["messages"][0]["content"], payload["messages"][1]["content"]
+        if "reviewer kedua yang skeptis" in system:
+            seen["verify"] = user
+            return {"checks": [{"id": 0, "valid": True, "severity": "blocker"},
+                               {"id": 1, "valid": False, "reason": "sudah ditangani"}]}
+        if "Judul MR: " + title in user and "Checklist" in system:
+            seen["system"], seen["user"] = system, user
+            return {"verdict": "REQUEST_CHANGES", "risk": "high", "summary": "Ada SQL injection.",
+                    "tests": "Tidak ada test untuk query baru.", "questions": ["Kenapa error repo.Find diabaikan?"],
+                    "findings": [
+                        {"severity": "blocker", "category": "security", "file": "internal/q/usecase.go", "line": 9,
+                         "title": "SQL injection", "evidence": 'q := "SELECT * FROM t WHERE id=" + id',
+                         "detail": "id dari user digabung ke query.", "suggestion": "Pakai placeholder ? / $1"},
+                        {"severity": "major", "file": "internal/q/usecase.go", "line": 2, "title": "Error diabaikan",
+                         "evidence": "data, _ := repo.Find(id)"},
+                        {"severity": "major", "file": "internal/q/usecase.go", "line": 3, "title": "Panic di nil",
+                         "evidence": "data.Items[0].Name"}]}
+        return old_reply(payload) if callable(old_reply) else old_reply
+    w.ai_b.reply = reply
+    try:
+        n = len(w.tg.sent)
+        cek(w)
+        mid = card(w, 570, n)
+    finally:
+        w.ai_b.reply = old_reply
+    u = seen["user"]
+    assert "angka kiri = nomor baris" in u and "    4 +\tq := " in u
+    assert "isi lengkap setelah perubahan" in u and "feat(IDAS-77): kuota per user" in u
+    assert ("internal/q/usecase.go", "b6" * 20) in w.gl.raw_requests       # file read at the MR's commit
+    assert "Standar tim" in seen["system"] and "Checklist" in seen["system"]
+    assert "SQL injection" in seen["verify"]
+    t = w.tg.messages[mid]["text"]
+    assert "SQL injection" in t and "usecase.go:4" in t                    # line corrected 9 -> 4
+    assert "💡 Pakai placeholder" in t and "Risiko: tinggi" in t and "Request changes" in t
+    assert "<b>Error diabaikan</b>" not in t                                # AI finding dropped by second pass
+    assert "Panic di nil" in t and "belum terbukti" in t                    # quote not in code
+    assert "Kenapa error repo.Find diabaikan?" in t and "🧪 Tidak ada test" in t
+
+
+def test_31_logout_revokes_session(w):
+    # this address is locked out since test_18; use the session obtained before the lockout
+    hdr = dict(w.session)
+    # "no-referrer" would make browsers send Origin: null on the logout form (seen in a real browser)
+    assert http(w, "/", headers=hdr)[2]["Referrer-Policy"] == "same-origin"
+    assert http(w, "/api/summary", headers=hdr)[0] == 200
+    assert json.loads(http(w, "/api/summary", headers=hdr)[1])["auth"] is True
+    # cross-site form post is refused
+    req = urllib.request.Request(f"http://127.0.0.1:{w.port}/logout", data=b"", method="POST",
+                                 headers={**hdr, "Origin": "http://evil.example"})
+    try:
+        urllib.request.build_opener(NoRedirect).open(req, timeout=10)
+        raise AssertionError("logout lintas situs harus ditolak")
+    except urllib.error.HTTPError as ex:
+        assert ex.code == 403
+    assert http(w, "/api/summary", headers=hdr)[0] == 200
+    # real logout: cookie cleared, back to login, old token no longer works
+    req = urllib.request.Request(f"http://127.0.0.1:{w.port}/logout", data=b"", method="POST",
+                                 headers={**hdr, "Origin": f"http://127.0.0.1:{w.port}"})
+    try:
+        urllib.request.build_opener(NoRedirect).open(req, timeout=10)
+        raise AssertionError("harus redirect")
+    except urllib.error.HTTPError as ex:
+        assert ex.code == 303 and ex.headers["Location"] == "/login?e=3"
+        assert "Max-Age=0" in ex.headers["Set-Cookie"]
+    assert http(w, "/api/summary", headers=hdr)[0] == 401, "token lama harus dicabut"

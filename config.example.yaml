@@ -32,6 +32,9 @@ review:
     wait_minutes: 15
   llm:                            # provider AI diatur di bagian `ai:` di bawah
     max_diff_chars: 120000
+    context_chars: 60000          # isi lengkap file yang berubah dikirim sebagai konteks (0 = mati)
+    standards_chars: 8000         # dokumen standar tim (standards/*.md) ikut dipakai saat review
+    verify: true                  # temuan blocker/major dicek ulang AI kedua; yang tidak terbukti dibuang
     language: Indonesia
     extra_rules: |
       - Perubahan bentuk response API (array jadi object, field null, dsb.) selalu dicatat sebagai breaking change.

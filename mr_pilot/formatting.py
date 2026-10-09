@@ -90,6 +90,9 @@ def quality_lines(q):
     return lines
 
 
+RISK_LABEL = {"low": "rendah 🟢", "medium": "sedang 🟡", "high": "tinggi 🔴"}
+
+
 def build_messages(mr, review, flags, header="🔔 MR baru untuk direview", quality=None):
     """Return (detail_text_or_None, card_text). Detail is merged into the card when it fits."""
     hp = mr.get("head_pipeline") or mr.get("pipeline") or {}
@@ -101,7 +104,8 @@ def build_messages(mr, review, flags, header="🔔 MR baru untuk direview", qual
         f"🧪 Pipeline: {PIPE_ICON.get(st, '❔')} {e(st)}  ·  📄 {e(mr.get('changes_count') or '?')} file",
     ]
     rv = ["", f"<b>Verdict:</b> {VERDICT_LABEL.get(review.get('verdict'), review.get('verdict'))}"
-              f"  <i>(sumber: {SOURCE_LABEL.get(review.get('source'), review.get('source'))})</i>"]
+              + (f" · Risiko: {RISK_LABEL[review['risk']]}" if review.get("risk") in RISK_LABEL else "")
+              + f"  <i>(sumber: {SOURCE_LABEL.get(review.get('source'), review.get('source'))})</i>"]
     if review.get("summary"):
         rv.append(e(review["summary"]))
     if review.get("breaking_changes"):
@@ -109,10 +113,18 @@ def build_messages(mr, review, flags, header="🔔 MR baru untuk direview", qual
     if review.get("findings"):
         rv += ["", "<b>Temuan:</b>"]
         for f in review["findings"][:8]:
-            loc = f" <code>{e(f['file'])}</code>" if f.get("file") else ""
-            rv.append(f"{SEV_ICON.get(f['severity'], '•')} <b>{e(f['title'])}</b>{loc}")
+            where = (f.get("file") or "") + (f":{f['line']}" if f.get("file") and f.get("line") else "")
+            loc = f" <code>{e(where)}</code>" if where else ""
+            unv = " <i>(belum terbukti, cek manual)</i>" if f.get("verified") is False else ""
+            rv.append(f"{SEV_ICON.get(f['severity'], '•')} <b>{e(f['title'])}</b>{loc}{unv}")
             if f.get("detail"):
                 rv.append(f"   {e(f['detail'][:300])}")
+            if f.get("suggestion"):
+                rv.append(f"   💡 {e(f['suggestion'][:220])}")
+    if review.get("tests"):
+        rv += ["", f"🧪 {e(review['tests'])}"]
+    if review.get("questions"):
+        rv += ["", "<b>❓ Tanyakan ke author:</b>"] + [f"• {e(q)}" for q in review["questions"][:3]]
     rv += quality_lines(quality)
     if flags:
         rv += ["", "<b>Cek otomatis:</b>"] + [f"• {e(x)}" for x in flags]
