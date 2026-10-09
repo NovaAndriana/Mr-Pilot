@@ -253,6 +253,7 @@ Deploy di server menjalankan `deploy/remote-deploy.sh`: login registry (token di
 | Login dashboard selalu "password salah" | Password diambil dari `DASHBOARD_PASSWORD` di **`data/.env`** (bukan `.env` di folder utama) dan dibaca **saat MR Pilot dinyalakan**. Setelah mengubah, jalankan `setup.bat restart`. Cek password aktif dengan `setup.bat password`. Hapus juga password lama yang tersimpan otomatis di browser. |
 | `setup.bat`: "Docker belum berjalan" | Buka Docker Desktop, tunggu status *running*, ulangi |
 | Linux: `permission denied ... docker.sock` | Logout/login (grup docker baru aktif), atau jalankan lagi; skrip memakai sudo otomatis |
+| Claude Code: "CLI belum terpasang di image Docker" / "CLI `claude` tidak ditemukan" | Image dibuat tanpa CLI Claude Code. Jalankan `setup.bat update` (otomatis dipasang kalau provider Claude Code aktif/tokennya tersimpan) atau `setup.bat update -WithClaudeCode` |
 | Claude Code: "belum login" | Jalankan `claude setup-token` di PC yang sudah login, tempel token di dashboard > AI |
 | AI lokal tidak terhubung dari Docker | Pastikan Ollama listen di `0.0.0.0` (`OLLAMA_HOST=0.0.0.0`) atau pakai `--with-ollama` |
 | Deploy CI gagal "config.yaml belum ada" | Jalankan `setup.bat ci` lagi dan pilih salin config ke server |

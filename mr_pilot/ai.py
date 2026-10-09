@@ -38,6 +38,13 @@ TYPES = {
 EDITABLE = ("enabled", "model", "base_url", "label", "cli_path", "timeout", "temperature")
 
 
+def claude_missing_msg():
+    if os.environ.get("MRP_IN_DOCKER") == "1":
+        return ("CLI Claude Code belum terpasang di image Docker. Jalankan `setup.bat update -WithClaudeCode` "
+                "(Linux: `./setup.sh update --with-claude-code`)")
+    return "CLI `claude` tidak ditemukan. Pasang Claude Code di komputer ini atau isi cli_path"
+
+
 class AIError(Exception):
     pass
 
@@ -196,7 +203,7 @@ class AIManager:
         t = p["type"]
         if t == "claude_code":
             if not self._claude_bin(p):
-                return False, "CLI `claude` tidak ditemukan"
+                return False, claude_missing_msg()
             if not (p.get("api_key") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
                     or os.path.exists(os.path.expanduser("~/.claude/.credentials.json"))):
                 return False, "belum login (isi CLAUDE_CODE_OAUTH_TOKEN dari `claude setup-token`)"
@@ -358,7 +365,7 @@ class AIManager:
         run in an empty temp folder with dontAsk so no tool can touch real files."""
         exe = self._claude_bin(p)
         if not exe:
-            raise AIError("CLI `claude` tidak ditemukan")
+            raise AIError(claude_missing_msg())
         env = dict(os.environ)
         token = p.get("api_key") or env.get("CLAUDE_CODE_OAUTH_TOKEN")
         cmd = [exe]

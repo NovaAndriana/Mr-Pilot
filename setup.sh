@@ -74,6 +74,26 @@ trust_cert() {
   say "Disimpan: $out ($(grep -c 'BEGIN CERTIFICATE' "$out") sertifikat)"
 }
 
+claude_code_wanted() {
+  # provider claude_code aktif / token tersimpan (dashboard -> data/ai_overrides.json, atau data/.env)
+  [ -n "$(kv CLAUDE_CODE_OAUTH_TOKEN data/.env)" ] && return 0
+  [ -f data/ai_overrides.json ] || return 1
+  if ! command -v python3 >/dev/null; then grep -q '"claude_code"' data/ai_overrides.json; return; fi
+  python3 - <<'PY' 2>/dev/null
+import json, sys
+p = (json.load(open("data/ai_overrides.json")).get("providers") or {}).get("claude_code") or {}
+sys.exit(0 if (p.get("enabled") is True or p.get("api_key")) else 1)
+PY
+}
+sync_claude_code_build() {
+  if [ "$CLAUDE" = true ] || { [ "$(kv INSTALL_CLAUDE_CODE)" != true ] && claude_code_wanted; }; then
+    if [ "$(kv INSTALL_CLAUDE_CODE)" != true ]; then
+      say "Provider Claude Code dipakai: CLI Claude Code ikut dipasang di image"
+      set_kv INSTALL_CLAUDE_CODE true
+    fi
+  fi
+}
+
 # ------------------------------------------------------------------ docker
 SUDO=""; [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null && SUDO="sudo"
 DOCKER="docker"
@@ -147,6 +167,7 @@ case "$CMD" in
       [ -z "$(kv TZ)" ] && set_kv TZ "${TZ:-Asia/Jakarta}"
     fi
     mkdir -p data/home
+    sync_claude_code_build
     say "Build image (beberapa menit pertama kali)"
     dc build
     say "Wizard konfigurasi"
@@ -164,6 +185,7 @@ case "$CMD" in
   update)
     ensure_docker
     if [ -d .git ]; then say "git pull"; git pull --ff-only || true; fi
+    sync_claude_code_build
     say "Build & restart"
     if [ -n "$(kv MRP_IMAGE)" ] && [ "$(kv MRP_IMAGE)" != "mr-pilot:local" ]; then dc pull mr-pilot; else dc build; fi
     dc up -d --remove-orphans
