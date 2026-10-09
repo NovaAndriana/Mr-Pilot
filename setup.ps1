@@ -142,10 +142,30 @@ function Export-TrustedChain([string]$url) {
   [IO.File]::WriteAllText($out, $sb.ToString(), (New-Object Text.UTF8Encoding($false)))
   Say "Disimpan: data\certs\$hostName-chain.pem ($($issuers.Count) sertifikat)"
 }
+function Test-ClaudeCodeWanted {
+  # provider claude_code aktif / token tersimpan (dashboard -> data\ai_overrides.json, atau data\.env)
+  if (Get-Kv "CLAUDE_CODE_OAUTH_TOKEN" "data\.env") { return $true }
+  if (Test-Path "data\ai_overrides.json") {
+    try {
+      $p = (Get-Content "data\ai_overrides.json" -Raw | ConvertFrom-Json).providers.claude_code
+      if ($p -and ($p.enabled -eq $true -or $p.api_key)) { return $true }
+    } catch { }
+  }
+  return $false
+}
+function Sync-ClaudeCodeBuild {
+  if ($WithClaudeCode -or ((Get-Kv "INSTALL_CLAUDE_CODE") -ne "true" -and (Test-ClaudeCodeWanted))) {
+    if ((Get-Kv "INSTALL_CLAUDE_CODE") -ne "true") {
+      Say "Provider Claude Code dipakai: CLI Claude Code ikut dipasang di image"
+      Set-Kv "INSTALL_CLAUDE_CODE" "true"
+    }
+  }
+}
 function Wait-Healthy {
   $p = Get-Kv "MRP_PORT"; if (-not $p) { $p = 8787 }
   Write-Host -NoNewline "    menunggu MR Pilot siap "
-  for ($i = 0; $i -lt 40; $i++) {
+  $tries = if ($env:MRP_HEALTH_WAIT_TRIES) { [int]$env:MRP_HEALTH_WAIT_TRIES } else { 40 }
+  for ($i = 0; $i -lt $tries; $i++) {
     try { Invoke-WebRequest "http://127.0.0.1:$p/healthz" -UseBasicParsing -TimeoutSec 2 | Out-Null; Write-Host "OK"; return } catch { }
     Write-Host -NoNewline "."; Start-Sleep 2
   }
@@ -186,6 +206,7 @@ switch ($Command) {
       if (-not (Get-Kv "TZ")) { Set-Kv "TZ" "Asia/Jakarta" }
     }
     New-Item -ItemType Directory -Force -Path "data\home" | Out-Null
+    Sync-ClaudeCodeBuild
     Say "Build image (beberapa menit pertama kali)"
     DC build
     Say "Wizard konfigurasi"
@@ -203,6 +224,7 @@ switch ($Command) {
   "update" {
     Ensure-Docker
     if (Test-Path .git) { Say "git pull"; git pull --ff-only }
+    Sync-ClaudeCodeBuild
     Say "Build & restart"
     DC build; DC up -d --remove-orphans; Wait-Healthy; Summary
   }
