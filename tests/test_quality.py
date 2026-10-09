@@ -78,8 +78,39 @@ def test_conventions_and_checklist():
     assert not std.check_commit_message("Merge branch 'staging' into feat/x")
     assert std.check_checklist("no checklist")[0]["rule"] == "pr-checklist-missing"
     desc = "## Pull Request Checklist\n- [x] Code follows coding standard\n- [ ] Unit test added/updated\n"
+    vs = std.check_checklist(desc)
+    assert [v["rule"] for v in vs] == ["pr-checklist-unchecked"] and "Unit test added/updated" in vs[0]["message"]
+    # match_template: also every item of standards/pr-checklist.md must be present
+    std.cfg["conventions"]["require_pr_checklist"] = "match_template"
     rules = {v["rule"] for v in std.check_checklist(desc)}
     assert "pr-checklist-unchecked" in rules and "pr-checklist-incomplete" in rules
+
+
+# MR !131 (AkuSign Mobile 2.0): the team's own template, fully ticked -> no checklist noise
+MR131 = """## Linked Ticket
+IDAS-5327
+## What does this MR do?
+Fix dynamic role is only for akusign_enterprise
+## Checklist
+- [x] Ticket ID is linked above
+- [x] Branch follows the `TICKET-ID/purpose` naming pattern
+- [x] MR is within size limits (≤ 25 files, ≤ 2,500 lines)
+- [x] Commits follow Conventional Commits format
+"""
+
+
+def test_team_checklist_fully_ticked_is_clean():
+    std = Standards(std_cfg()["code_quality"])
+    assert std.check_checklist(MR131) == []
+    assert [v["rule"] for v in std.check_checklist(MR131.replace("- [x] MR is", "- [ ] MR is"))] == \
+        ["pr-checklist-unchecked"]
+
+
+def test_title_warning_suggests_title_from_branch():
+    std = Standards(std_cfg()["code_quality"])
+    v = std.check_title("Idas 5327/fix role signature", "IDAS-5327/fix-role-signature")[0]
+    assert "Saran: `fix(IDAS-5327): role signature`" in v["message"] and "^(" not in v["message"]
+    assert "Saran" not in std.check_title("Update", "main")[0]["message"]
 
 
 def test_validate_rules_yaml():
@@ -140,8 +171,8 @@ def test_code_quality_run_posts_on_commit_and_dedups():
     gl, store = QGL(), Store(":memory:")
     cq = CodeQuality(cfg, gl, store)
     s = cq.run(mr())
-    # 1 error (sql concat) + warnings: ignored error, fmt.Println, PR checklist missing
-    assert s["counts"]["error"] == 1 and s["counts"]["warning"] == 3
+    # 1 error (sql concat) + warnings: ignored error, fmt.Println; missing PR checklist is only info
+    assert s["counts"]["error"] == 1 and s["counts"]["warning"] == 2 and s["counts"]["info"] >= 1
     # warnings posted ON the commit with file + line (info commit-message not posted: min severity warning)
     lines = sorted((c[1], c[2]) for c in gl.commit_comments)
     assert lines == [("internal/a/b.go", 11), ("internal/a/b.go", 12), ("internal/a/b.go", 13)]
