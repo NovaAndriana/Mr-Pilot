@@ -61,6 +61,15 @@ function Repair-EnvFile {
   }
 }
 
+# Docker writes progress ("Container x Stopping") to stderr. In Windows PowerShell 5.1 with
+# $ErrorActionPreference = "Stop", redirecting a native command's stderr turns that text into a
+# terminating error. Run quiet docker calls with Continue and judge success by the exit code only.
+function Invoke-DockerQuiet {
+  $old = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try { & docker @args *> $null } finally { $ErrorActionPreference = $old }
+  return $LASTEXITCODE
+}
 function Ensure-Docker {
   if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Say "Docker Desktop belum terpasang."
@@ -71,19 +80,16 @@ function Ensure-Docker {
     Write-Host "    (setujui syarat & tunggu status 'running'), lalu jalankan setup.bat lagi." -ForegroundColor Yellow
     exit 0
   }
-  docker info *> $null
-  if ($LASTEXITCODE -ne 0) {
+  if ((Invoke-DockerQuiet info) -ne 0) {
     $exe = Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"
     if (Test-Path $exe) {
       Say "Menyalakan Docker Desktop…"
       Start-Process $exe
-      for ($i = 0; $i -lt 60; $i++) { Start-Sleep 3; docker info *> $null; if ($LASTEXITCODE -eq 0) { break } }
+      for ($i = 0; $i -lt 60; $i++) { Start-Sleep 3; if ((Invoke-DockerQuiet info) -eq 0) { break } }
     }
-    docker info *> $null
-    if ($LASTEXITCODE -ne 0) { Write-Host "Docker belum berjalan. Buka Docker Desktop lalu ulangi." -ForegroundColor Red; exit 1 }
+    if ((Invoke-DockerQuiet info) -ne 0) { Write-Host "Docker belum berjalan. Buka Docker Desktop lalu ulangi." -ForegroundColor Red; exit 1 }
   }
-  docker compose version *> $null
-  if ($LASTEXITCODE -ne 0) { Write-Host "'docker compose' tidak tersedia. Update Docker Desktop." -ForegroundColor Red; exit 1 }
+  if ((Invoke-DockerQuiet compose version) -ne 0) { Write-Host "'docker compose' tidak tersedia. Update Docker Desktop." -ForegroundColor Red; exit 1 }
 }
 function DC { & docker compose @args; if ($LASTEXITCODE -ne 0) { throw "docker compose $($args -join ' ') gagal ($LASTEXITCODE)" } }
 
@@ -163,14 +169,14 @@ switch ($Command) {
   "status" { Ensure-Docker; DC ps }
   "reset" {
     Ensure-Docker
-    docker compose stop mr-pilot 2>$null | Out-Null   # database tidak boleh sedang dipakai
+    Invoke-DockerQuiet compose stop mr-pilot | Out-Null   # database tidak boleh sedang dipakai
     $rargs = @("reset"); if ($Yes) { $rargs += "--yes" }; if ($All) { $rargs += "--all" }
     docker compose run --rm mr-pilot @rargs
     if ($LASTEXITCODE -eq 0) {
       DC up -d --force-recreate mr-pilot   # container baru = riwayat log Docker juga bersih
       Wait-Healthy
     } else {
-      docker compose start mr-pilot 2>$null | Out-Null
+      Invoke-DockerQuiet compose start mr-pilot | Out-Null
     }
   }
   "logs" { Ensure-Docker; docker compose logs -f --tail 100 mr-pilot }
@@ -183,7 +189,7 @@ switch ($Command) {
   "config" {
     Ensure-Docker
     # hentikan bot dulu: wizard memakai bot Telegram yang sama (409) dan menulis ulang .env
-    docker compose stop mr-pilot 2>$null | Out-Null
+    Invoke-DockerQuiet compose stop mr-pilot | Out-Null
     DC run --rm mr-pilot setup
     DC up -d mr-pilot
     Wait-Healthy
