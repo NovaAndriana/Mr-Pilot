@@ -75,6 +75,14 @@ class GitLab:
                 return self.get(path + "/changes").get("changes", [])
             raise
 
+    def get_file_raw(self, pid, path, ref):
+        """File content at `ref` (commit sha / branch). Raises for missing files."""
+        enc = urllib.parse.quote(path, safe="")
+        r = self._req("GET", f"/projects/{_pid(pid)}/repository/files/{enc}/raw", params={"ref": ref})
+        r.raise_for_status()
+        r.encoding = r.encoding or "utf-8"
+        return r.text
+
     def get_commits(self, pid, iid):
         """Newest first (GitLab order), all pages."""
         return self.get_all(f"/projects/{_pid(pid)}/merge_requests/{iid}/commits")

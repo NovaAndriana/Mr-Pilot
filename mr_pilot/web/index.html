@@ -265,6 +265,11 @@ input[type=password] { width:100%; border:1px solid var(--line); border-radius:8
       <button class="icon-btn" id="theme" title="Ganti tema" aria-label="Ganti tema terang/gelap">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
       </button>
+      <form method="post" action="/logout" id="logout" hidden>
+        <button class="icon-btn" type="submit" title="Keluar" aria-label="Keluar dari dashboard">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </form>
     </div>
   </div>
 </header>
@@ -579,6 +584,7 @@ let summary = null;
 async function loadSummary() {
   summary = await api("/api/summary");
   const s = summary, k = s.kpi;
+  $("#logout").hidden = !s.auth;
   $("#q-num").textContent = k.waiting;
   $("#q-text").textContent = k.waiting === 0 ? "MR menunggu keputusan Anda. Antrian bersih." : "MR menunggu keputusan Anda";
   $("#q-sub").innerHTML = k.waiting

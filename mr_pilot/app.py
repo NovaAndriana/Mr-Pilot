@@ -345,7 +345,8 @@ class App:
         # retire the old Telegram card for this MR (buttons removed)
         if rec and rec.get("tg_msg_id") and rec.get("tg_text") and rec.get("status") not in ("notify_failed",):
             self.safe_edit(rec["tg_msg_id"], rec["tg_text"] + "\n\n<i>↪️ Diganti review terbaru di bawah.</i>")
-        detail, text = build_messages(mr, review, heuristic_flags(mr, self.cfg), header, quality)
+        flags = heuristic_flags(mr, self.cfg) + list(review.get("flags") or [])
+        detail, text = build_messages(mr, review, flags, header, quality)
         if detail:
             self.safe_send(detail)
         msg_id = self.safe_send(text, buttons=review_buttons(pid, iid, mr["web_url"],

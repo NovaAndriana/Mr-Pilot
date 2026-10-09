@@ -8,6 +8,8 @@ from datetime import datetime
 from fnmatch import fnmatch
 
 
+from .review_context import (build_review_diff, code_change_size, gather_files, has_test_change,
+                             verify_findings)
 from .util import short_error
 
 log = logging.getLogger("mr_pilot.review")
@@ -107,10 +109,23 @@ def normalize(data, source):
         if not isinstance(f, dict):
             continue
         sev = _SEV_MAP.get(str(f.get("severity", "minor")).strip().lower(), "minor")
-        findings.append({"severity": sev, "title": str(f.get("title", "")).strip(),
-                         "file": str(f.get("file", "") or "").strip(),
-                         "detail": str(f.get("detail", "") or "").strip()})
+        file_ = str(f.get("file", "") or "").strip()
+        line = f.get("line")
+        if not line and re.search(r":\d+$", file_):  # "path:123" style
+            file_, line = file_.rsplit(":", 1)
+        try:
+            line = int(line) if line not in (None, "") else None
+        except (TypeError, ValueError):
+            line = None
+        findings.append({"severity": sev, "title": str(f.get("title", "")).strip()[:200],
+                         "file": file_, "line": line,
+                         "category": str(f.get("category", "") or "").strip().lower()[:20],
+                         "evidence": str(f.get("evidence", "") or "").strip()[:600],
+                         "detail": str(f.get("detail", "") or "").strip()[:800],
+                         "suggestion": str(f.get("suggestion", "") or "").strip()[:600],
+                         "confidence": str(f.get("confidence", "") or "").strip().lower()[:10]})
     order = {"blocker": 0, "major": 1, "minor": 2, "info": 3}
+    findings = [f for f in findings if f["title"]][:8]
     findings.sort(key=lambda x: order[x["severity"]])
     # never "approve" with blocker/major findings
     if verdict == "APPROVE" and any(f["severity"] in ("blocker", "major") for f in findings):
@@ -121,38 +136,83 @@ def normalize(data, source):
             "breaking_changes": _str_list(data.get("breaking_changes"), 5),
             "solves": str(data.get("solves", "") or "").strip(),
             "changes": _str_list(data.get("changes")),
-            "good_points": _str_list(data.get("good_points"), 4)}
+            "good_points": _str_list(data.get("good_points"), 4),
+            "risk": str(data.get("risk", "") or "").strip().lower() if str(data.get("risk", "")).strip().lower()
+            in ("low", "medium", "high") else "",
+            "tests": str(data.get("tests", "") or "").strip()[:300],
+            "questions": _str_list(data.get("questions"), 3)}
 
 
 # --------------------------------------------------------------- LLM review
-SYSTEM_PROMPT = """Kamu adalah Tech Lead senior yang mereview merge request untuk timnya.
-Review dengan teliti tapi ringkas. Prioritas pengecekan:
-1. Breaking change kontrak API (bentuk request/response, field dihapus/berubah tipe, status code baru).
-2. Security: authz, query tanpa filter, injection, secret/credential di kode, data sensitif di log.
-3. Kebenaran logika & data: edge case, nil/null, transaksi, race condition, migrasi DB.
-4. Test: apakah perubahan penting ter-cover, assertion yang salah.
-5. Performa: N+1 query, loop berat, panggilan eksternal per item.
-6. Konsistensi dengan deskripsi MR.
-Aturan:
-- Jangan mengarang. Hanya laporkan yang terlihat di diff. Kalau diff terpotong, sebutkan di summary.
-- Maksimal 8 temuan, urutkan dari paling penting. Sertakan file:line bila bisa.
-- verdict APPROVE hanya jika tidak ada temuan blocker/major.
-- Tulis dalam bahasa @@LANGUAGE@@.
+SYSTEM_PROMPT = """Kamu Staff Engineer yang mereview merge request untuk Tech Lead. Tujuanmu: menemukan masalah
+NYATA yang akan merusak produksi, keamanan, atau kontrak API, bukan memberi komentar sebanyak-banyaknya.
+
+Cara kerja (lakukan di kepala, jangan ditulis):
+1. Pahami tujuan MR dari judul, deskripsi, dan commit. Bandingkan dengan apa yang benar-benar diubah.
+2. Untuk setiap perubahan logika, telusuri: dari mana data datang, bisa nil/kosong/duplikat?, siapa pemanggilnya,
+   apa yang terjadi saat error, apakah transaksi/lock/konteks dibawa dengan benar. Pakai "isi lengkap file"
+   untuk melihat kode di sekitar perubahan, jangan menebak.
+3. Baru tulis temuan yang bisa kamu buktikan dengan baris kode.
+
+Checklist (cek yang relevan dengan file yang berubah):
+- Kontrak API: field response dihapus/ganti nama/ganti tipe, array<->object, null vs kosong, status code, validasi request.
+- Security: authn/authz per endpoint & per resource (IDOR), query tanpa filter tenant/user, SQL/command injection,
+  secret/token di kode atau log, data pribadi di log, input tidak divalidasi, CORS/CSRF.
+- Go: error diabaikan (`_ =`, `_, _ :=`), error di-shadow, nil map/pointer, goroutine bocor/tanpa ctx, defer di loop,
+  rows/body tidak di-Close, transaksi tanpa rollback, race (map/slice dipakai bersama), time zone, int overflow.
+- TypeScript/React/React Native: deps useEffect/useMemo salah, state dimutasi langsung, promise tanpa catch,
+  `any` di batas API, key list, dangerouslySetInnerHTML, re-render berat, kebocoran listener/timer.
+- Data & DB: migrasi tidak backward-compatible, index hilang untuk query baru, N+1, query di dalam loop, pagination.
+- Konkurensi & idempotensi: retry ganda, double submit, update tanpa kondisi.
+- Test: logika baru/berubah tanpa test, test yang tidak menguji apa-apa, assertion keliru.
+
+Kalibrasi severity:
+- blocker: pasti salah di produksi, celah keamanan, kebocoran data, data rusak, atau breaking change tanpa koordinasi.
+- major: bug yang sangat mungkin terjadi pada kasus nyata, error penting tidak ditangani, logika berisiko tanpa test.
+- minor: maintainability/kejelasan yang layak diperbaiki. Gaya, format, dan selera pribadi TIDAK dilaporkan.
+
+Aturan keras:
+- Setiap temuan WAJIB punya "evidence": salin PERSIS 1-3 baris kode dari diff/file (tanpa nomor baris).
+  Kalau tidak bisa menunjuk barisnya, jangan laporkan.
+- "line" = nomor baris di file BARU (angka di kiri diff / isi file).
+- Lebih baik 3 temuan tajam daripada 10 temuan lemah. Maksimal 8. Jangan mengulang hal yang sama.
+- Kalau diff terpotong, sebutkan di summary dan jangan menebak isi yang tidak terlihat.
+- verdict: REQUEST_CHANGES jika ada blocker; NEEDS_ATTENTION jika ada major atau ada pertanyaan penting;
+  APPROVE jika hanya minor/tidak ada temuan.
+- Tulis dalam bahasa @@LANGUAGE@@, singkat dan langsung ke inti.
 @@EXTRA_RULES@@
+@@STANDARDS@@
 Jawab HANYA dengan JSON valid (tanpa teks lain) dengan skema:
 {"verdict": "APPROVE|NEEDS_ATTENTION|REQUEST_CHANGES",
+  "risk": "low|medium|high",
   "summary": "2-3 kalimat penilaianmu atas MR ini",
-  "solves": "1-2 kalimat: masalah apa yang diselesaikan / manfaat MR ini bagi produk atau user",
-  "changes": ["3-6 poin perubahan utama, bahasa sederhana, mis. 'Response balance-deduction kini menampilkan kuota per user'"],
-  "good_points": ["maks 4 hal yang memang bagus dari implementasinya (test, security fix, struktur kode). Kosongkan jika tidak ada, jangan dibuat-buat"],
+  "solves": "1-2 kalimat: masalah apa yang diselesaikan / manfaat MR ini",
+  "changes": ["3-6 poin perubahan utama, bahasa sederhana"],
+  "good_points": ["maks 4 hal yang memang bagus. Kosongkan jika tidak ada, jangan dibuat-buat"],
   "breaking_changes": ["..."],
-  "findings": [{"severity": "blocker|major|minor", "file": "path:line", "title": "judul singkat", "detail": "penjelasan + saran"}]}"""
+  "tests": "1 kalimat: apakah perubahan penting sudah ter-cover test",
+  "questions": ["maks 3 pertanyaan penting untuk author jika ada hal yang tidak jelas"],
+  "findings": [{"severity": "blocker|major|minor",
+                "category": "bug|security|breaking|performance|test|data|standard",
+                "file": "path/file.go", "line": 123,
+                "title": "judul singkat",
+                "evidence": "baris kode persis",
+                "detail": "kenapa ini masalah + dampaknya",
+                "suggestion": "perbaikan konkret (boleh potongan kode singkat)",
+                "confidence": "high|medium"}]}"""
+
+VERIFY_PROMPT = """Kamu reviewer kedua yang skeptis. Reviewer pertama menulis temuan di bawah. Periksa SETIAP temuan
+terhadap kode yang diberikan: apakah masalahnya benar-benar ada dan severity-nya tepat? Tolak temuan yang
+spekulatif, sudah ditangani di kode lain yang terlihat, salah membaca kode, atau hanya soal gaya.
+Jawab HANYA JSON: {"checks": [{"id": 0, "valid": true, "severity": "blocker|major|minor", "reason": "singkat"}]}"""
 
 
-def build_system_prompt(language, extra_rules):
-    # str.replace, bukan .format: extra_rules buatan user boleh berisi { } tanpa merusak prompt
-    return SYSTEM_PROMPT.replace("@@LANGUAGE@@", str(language or "Indonesia")).replace(
-        "@@EXTRA_RULES@@", str(extra_rules or ""))
+def build_system_prompt(language, extra_rules, standards=""):
+    # str.replace, bukan .format: extra_rules/standar buatan user boleh berisi { } tanpa merusak prompt
+    std = (f"\nStandar tim (pelanggaran dilaporkan dengan category \"standard\"):\n{standards}\n"
+           if standards else "")
+    return (SYSTEM_PROMPT.replace("@@LANGUAGE@@", str(language or "Indonesia"))
+            .replace("@@EXTRA_RULES@@", str(extra_rules or "")).replace("@@STANDARDS@@", std))
 
 
 # --------------------------------------------------------- bot comment parse
@@ -306,6 +366,7 @@ def _parse_dt(s):
 class Reviewer:
     def __init__(self, cfg, gl, ai=None):
         from .ai import AIManager
+        self.full = cfg
         self.cfg = cfg["review"]
         self.gl = gl
         self.ai = ai or AIManager(cfg)
@@ -369,25 +430,96 @@ class Reviewer:
             return parse_bot_review(body)
         return None
 
+    def _standards_text(self, paths, budget):
+        cq = self.full.get("code_quality") or {}
+        if budget <= 0 or not cq.get("enabled"):
+            return ""
+        try:
+            from .standards import Standards
+            std = Standards(cq, self.full.get("_base_dir", "."))
+            text = std.documents({std.stack_of(p) for p in paths})
+        except Exception:
+            return ""
+        return text[:budget]
+
     def from_llm(self, mr):
         llm = self.cfg["llm"]
         try:
             diffs = self.gl.get_diffs(mr["project_id"], mr["iid"])
-            diff_text, skipped, truncated = build_diff_text(
-                diffs, self.cfg.get("ignore_files") or [], int(llm["max_diff_chars"]))
-            system = build_system_prompt(llm.get("language", "Indonesia"), llm.get("extra_rules"))
+            ignore = self.cfg.get("ignore_files") or []
+            diff_text, skipped, truncated, included = build_review_diff(diffs, ignore, int(llm["max_diff_chars"]))
+            files, files_raw = gather_files(self.gl, mr, diffs, ignore, int(llm.get("context_chars", 60000)))
+            standards = self._standards_text(included, int(llm.get("standards_chars", 8000)))
+            try:
+                commits = [c.get("title") or (c.get("message") or "").split("\n")[0]
+                           for c in self.gl.get_commits(mr["project_id"], mr["iid"])][:20]
+            except Exception:
+                commits = []
+            system = build_system_prompt(llm.get("language", "Indonesia"), llm.get("extra_rules"), standards)
             user = (f"Judul MR: {mr['title']}\n"
                     f"Branch: {mr['source_branch']} -> {mr['target_branch']}\n"
                     f"Deskripsi:\n{(mr.get('description') or '-')[:6000]}\n\n"
+                    f"Commit:\n" + "".join(f"- {c}\n" for c in commits) + "\n"
                     f"File dilewati: {', '.join(skipped) or '-'}\n"
-                    f"Diff {'(TERPOTONG) ' if truncated else ''}:\n{diff_text}")
+                    f"Diff {'(TERPOTONG) ' if truncated else ''}(angka kiri = nomor baris di file baru):\n{diff_text}\n"
+                    + (f"\nIsi lengkap file yang berubah (untuk konteks):\n{''.join(files)}" if files else ""))
             raw, provider = self.ai.complete(system, user, "review", validate=validate_review)
             rv = normalize(extract_json(raw), "llm")
             rv["provider"] = provider
+            verify_findings(rv["findings"], "\n".join(d.get("diff") or "" for d in diffs), files_raw)
+            if llm.get("verify", True) and any(f["severity"] in ("blocker", "major") for f in rv["findings"]):
+                self._second_opinion(rv, diff_text, files)
+            self._settle_verdict(rv)
+            if code_change_size(diffs) >= 20 and not has_test_change(diffs):
+                rv["flags"] = ["Logika berubah tanpa perubahan file test"]
+            if truncated:
+                rv["summary"] = (rv["summary"] + " (Diff terlalu besar, sebagian file tidak direview.)").strip()
             return rv
         except Exception as e:
             log.warning("LLM review gagal: %s", short_error(e))
             return empty_review("llm", f"Review AI gagal: {short_error(e)}")
+
+    def _second_opinion(self, rv, diff_text, files):
+        """Skeptical second pass over blocker/major findings: drop false positives, fix severity."""
+        idx = [i for i, f in enumerate(rv["findings"]) if f["severity"] in ("blocker", "major")]
+        items = [{"id": i, "severity": rv["findings"][i]["severity"], "file": rv["findings"][i]["file"],
+                  "line": rv["findings"][i]["line"], "title": rv["findings"][i]["title"],
+                  "evidence": rv["findings"][i]["evidence"], "detail": rv["findings"][i]["detail"]} for i in idx]
+        user = (f"Temuan:\n{json.dumps(items, ensure_ascii=False, indent=1)}\n\nDiff:\n{diff_text[:60000]}\n"
+                + (f"\nIsi file:\n{''.join(files)[:40000]}" if files else ""))
+        try:
+            raw, _ = self.ai.complete(VERIFY_PROMPT, user, "review", validate=extract_json)
+            checks = extract_json(raw).get("checks") or []
+        except Exception as e:
+            log.info("Verifikasi temuan dilewati: %s", short_error(e))
+            return
+        drop = set()
+        for c in checks if isinstance(checks, list) else []:
+            if not isinstance(c, dict) or c.get("id") not in idx:
+                continue
+            f = rv["findings"][c["id"]]
+            if c.get("valid") is False:
+                drop.add(c["id"])
+                continue
+            sev = _SEV_MAP.get(str(c.get("severity", "")).lower())
+            if sev in ("blocker", "major", "minor"):
+                f["severity"] = sev
+        if drop:
+            log.info("Verifikasi membuang %s temuan yang tidak terbukti", len(drop))
+        rv["findings"] = [f for i, f in enumerate(rv["findings"]) if i not in drop]
+        rv["rejected_findings"] = len(drop)
+
+    @staticmethod
+    def _settle_verdict(rv):
+        order = {"blocker": 0, "major": 1, "minor": 2, "info": 3}
+        rv["findings"].sort(key=lambda x: order.get(x["severity"], 3))
+        sevs = {f["severity"] for f in rv["findings"]}
+        if "blocker" in sevs:
+            rv["verdict"] = "REQUEST_CHANGES"
+        elif rv["verdict"] == "APPROVE" and "major" in sevs:
+            rv["verdict"] = "NEEDS_ATTENTION"
+        elif rv["verdict"] == "REQUEST_CHANGES" and not rv.get("breaking_changes"):
+            rv["verdict"] = "NEEDS_ATTENTION"  # nothing proven blocking after verification
 
 
 # ------------------------------------------------------- deterministic flags

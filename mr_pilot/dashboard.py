@@ -100,6 +100,7 @@ class DashboardData:
         return {
             "now": now,
             "user": self.store.kv_get("gitlab_user") or self.cfg["gitlab"].get("username") or "",
+            "auth": bool(self.cfg["dashboard"].get("password")),
             "health": {
                 "last_poll_ok": float(self.store.kv_get("last_poll_ok", 0) or 0),
                 "last_poll_error": self.store.kv_get("last_poll_error", ""),
@@ -338,20 +339,42 @@ class Dashboard:
         with self.fail_lock:
             self.failed.pop(ip, None)
 
-    # sessions are stateless HMAC tokens: "<expiry>.<sig>"
+    # sessions: HMAC tokens "<expiry>.<id>.<sig>"; logout puts <id> on a revocation list (kept until expiry)
     def make_token(self, ttl=7 * 86400):
-        exp = str(int(time.time() + ttl))
-        return exp + "." + hmac.new(self.secret, exp.encode(), "sha256").hexdigest()
+        head = f"{int(time.time() + ttl)}.{secrets.token_hex(8)}"
+        return head + "." + hmac.new(self.secret, head.encode(), "sha256").hexdigest()
+
+    def _parse_token(self, tok):
+        try:
+            exp, sid, sig = (tok or "").split(".")
+            good = hmac.new(self.secret, f"{exp}.{sid}".encode(), "sha256").hexdigest()
+            if hmac.compare_digest(sig, good) and int(exp) > time.time():
+                return sid, int(exp)
+        except ValueError:
+            pass
+        return None, 0
+
+    def _revoked(self):
+        try:
+            data = json.loads(self.store.kv_get("revoked_sessions", "{}") or "{}")
+        except ValueError:
+            data = {}
+        now = time.time()
+        return {k: v for k, v in data.items() if v > now}  # drop expired entries
 
     def check_token(self, tok):
         if not self.password:
             return True
-        try:
-            exp, sig = (tok or "").split(".", 1)
-            good = hmac.new(self.secret, exp.encode(), "sha256").hexdigest()
-            return hmac.compare_digest(sig, good) and int(exp) > time.time()
-        except ValueError:
-            return False
+        sid, _ = self._parse_token(tok)
+        return bool(sid) and sid not in self._revoked()
+
+    def revoke_token(self, tok):
+        sid, exp = self._parse_token(tok)
+        if sid:
+            with self.fail_lock:
+                rev = self._revoked()
+                rev[sid] = exp
+                self.store.kv_set("revoked_sessions", json.dumps(rev))
 
     def serve(self):
         dash = self
@@ -402,7 +425,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Referrer-Policy", "same-origin")
         if ctype.startswith("text/html"):
             self.send_header("Content-Security-Policy",
                              "default-src 'self'; script-src 'self' 'unsafe-inline'; "
@@ -480,8 +503,20 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send(500, {"error": redact(str(ex))[:300]})
         self._send(404, {"error": "not found"})
 
+    def _same_origin(self):
+        """Browsers send Origin on POST; refuse cross-site form posts (logout CSRF)."""
+        origin = self.headers.get("Origin")
+        return not origin or urlparse(origin).netloc == (self.headers.get("Host") or "")
+
     def do_POST(self):
         u = urlparse(self.path)
+        if u.path == "/logout":
+            if not self._same_origin():
+                return self._send(403, {"error": "forbidden"})
+            self.app.revoke_token(self._cookie())
+            return self._send(303, b"", headers={
+                "Location": "/login?e=3",
+                "Set-Cookie": "mrp_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"})
         if u.path == "/login":
             ip = self.client_address[0]
             if self.app.locked_out(ip):

@@ -36,6 +36,9 @@ DEFAULTS = {
             "model": "claude-sonnet-5-5",
             "base_url": "",
             "max_diff_chars": 120000,
+            "context_chars": 60000,   # isi lengkap file yang berubah, untuk konteks (0 = mati)
+            "standards_chars": 8000,  # dokumen standar tim yang ikut dikirim ke AI review
+            "verify": True,           # cek ulang temuan blocker/major (1 panggilan AI tambahan)
             "language": "Indonesia",
             "extra_rules": "",
         },
