@@ -7,6 +7,7 @@
 #   ./setup.sh update | start | stop | restart | status | logs | doctor | config | shell | demo
 #   ./setup.sh password [--reset]   lihat / buat ulang password dashboard
 #   ./setup.sh reset [--all] [-y]   hapus riwayat MR, aktivitas & log (token/.env, config, standar tetap)
+#   ./setup.sh trust-cert [--url=https://...]  percayai sertifikat SSL GitLab (CERTIFICATE_VERIFY_FAILED)
 #
 # Opsi: --server  --port N  --with-claude-code  --with-ollama[=model]  --non-interactive  -y
 set -euo pipefail
@@ -15,7 +16,8 @@ cd "$(dirname "$0")"
 CMD=install; PW_RESET=0; ALL=0; BIND=""; PORT=""; CLAUDE=""; OLLAMA=""; OLLAMA_MODEL=""; NONINT=0; YES=0
 for arg in "$@"; do
   case "$arg" in
-    install|update|ci|start|stop|restart|status|logs|doctor|config|shell|demo|password|reset) CMD=$arg ;;
+    install|update|ci|start|stop|restart|status|logs|doctor|config|shell|demo|password|reset|trust-cert) CMD=$arg ;;
+    --url=*) TRUST_URL=${arg#*=} ;;
     --all) ALL=1 ;;
     --reset) PW_RESET=1 ;;
     --server) BIND=0.0.0.0 ;;
@@ -40,6 +42,37 @@ ask_yn() { # ask_yn "pertanyaan" default(y/n)
 }
 kv() { { grep -E "^$1=" "${2:-.env}" 2>/dev/null || true; } | tail -1 | cut -d= -f2- | tr -d '"'; }
 set_kv() { touch .env; if grep -q "^$1=" .env; then sed -i.bak "s|^$1=.*|$1=$2|" .env && rm -f .env.bak; else echo "$1=$2" >> .env; fi; }
+
+trust_cert() {
+  # Simpan penerbit sertifikat server ke data/certs (CA kantor / intermediate yang tidak dikirim server)
+  local url="${1:-$(kv GITLAB_URL data/.env)}"
+  [ -n "$url" ] || { echo "GITLAB_URL belum diisi (data/.env)."; exit 1; }
+  local hp="${url#*://}"; hp="${hp%%/*}"; local host="${hp%%:*}" port=443
+  [ "$hp" != "$host" ] && port="${hp#*:}"
+  command -v openssl >/dev/null || { echo "Butuh openssl."; exit 1; }
+  say "Mengambil sertifikat $host:$port"
+  mkdir -p data/certs
+  local tmp; tmp=$(mktemp -d)
+  openssl s_client -connect "$host:$port" -servername "$host" -showcerts </dev/null 2>/dev/null \
+    | awk -v d="$tmp" '/BEGIN CERTIFICATE/{n++; p=1} p{print > (d "/c" n ".pem")} /END CERTIFICATE/{p=0}'
+  local out="data/certs/$host-chain.pem"; : > "$out.tmp"
+  local f
+  for f in $(ls "$tmp"/c*.pem 2>/dev/null | sort -V | tail -n +2); do cat "$f" >> "$out.tmp"; done
+  # issuer of the last cert from the system trust store (company CA installed on this server)
+  local last; last=$(ls "$tmp"/c*.pem 2>/dev/null | sort -V | tail -1)
+  if [ -n "$last" ]; then
+    local h; h=$(openssl x509 -in "$last" -noout -issuer_hash 2>/dev/null || true)
+    for f in /etc/ssl/certs/"$h".*; do [ -f "$f" ] && cat "$f" >> "$out.tmp"; done
+  fi
+  rm -rf "$tmp"
+  if ! grep -q "BEGIN CERTIFICATE" "$out.tmp"; then
+    rm -f "$out.tmp"
+    echo "Penerbit sertifikat $host tidak ditemukan. Minta file CA ke tim IT, taruh di data/certs/, lalu restart."
+    echo "Darurat: GITLAB_VERIFY_SSL=false di data/.env."; exit 1
+  fi
+  mv "$out.tmp" "$out"
+  say "Disimpan: $out ($(grep -c 'BEGIN CERTIFICATE' "$out") sertifikat)"
+}
 
 # ------------------------------------------------------------------ docker
 SUDO=""; [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null && SUDO="sudo"
@@ -145,6 +178,11 @@ case "$CMD" in
   start) ensure_docker; dc up -d; wait_healthy || true; summary ;;
   stop) ensure_docker; dc down ;;
   restart) ensure_docker; dc restart mr-pilot; wait_healthy || true ;;
+  trust-cert)
+    trust_cert "${TRUST_URL:-}"
+    if command -v docker >/dev/null && [ -n "$($DOCKER compose ps -q mr-pilot 2>/dev/null)" ]; then
+      dc restart mr-pilot && wait_healthy || true
+    fi ;;
   status) ensure_docker; dc ps ;;
   reset)
     ensure_docker

@@ -253,8 +253,10 @@ def run_setup(data_dir, interactive=True):
         verify = str(cur("GITLAB_VERIFY_SSL", "true")).lower() != "false"
         ok, info = check_gitlab(url, token, verify)
         if info == "SSL_ERROR":
-            say("Sertifikat SSL GitLab tidak dikenali (biasanya self-signed).", "warn")
-            if a.yes("Lewati verifikasi SSL?", True):
+            say("Sertifikat SSL GitLab tidak dikenali (CA kantor / self-signed / intermediate tidak lengkap).", "warn")
+            say("Cara aman: batalkan, jalankan `setup.bat trust-cert` (Windows) atau `./setup.sh trust-cert`, "
+                "lalu ulangi setup. Sertifikat disimpan di data/certs.", "warn")
+            if a.yes("Atau lewati verifikasi SSL sekarang (kurang aman)?", False):
                 verify = False
                 ok, info = check_gitlab(url, token, verify)
         if ok:

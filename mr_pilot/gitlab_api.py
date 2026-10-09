@@ -26,6 +26,9 @@ class GitLab:
         self.timeout = timeout
 
     def _req(self, method, path, **kw):
+        # verify passed per request: requests lets REQUESTS_CA_BUNDLE override a session-level
+        # verify=False, which would silently re-enable checks the user turned off
+        kw.setdefault("verify", self.s.verify)
         return self.s.request(method, self.base + path, timeout=self.timeout, **kw)
 
     def get(self, path, params=None):
