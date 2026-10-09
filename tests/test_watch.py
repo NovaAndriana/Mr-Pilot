@@ -112,3 +112,20 @@ def test_want_delete():
                               ("keep", "md", False), ("delete", "m", True)):
         a.cfg = {"merge": {"source_branch": mode}}
         assert a.want_delete(action) is exp, (mode, action)
+
+
+def test_store_reset_keeps_gitlab_markers_and_sessions(tmp_path):
+    from mr_pilot.store import Store
+    s = Store(str(tmp_path / "db.sqlite"))
+    s.upsert("7:1", project_id=7, iid=1, sha="a", status="notified")
+    s.add_event("review", "x", "y", "7:1", "info")
+    for k in ("cq_commit:7:a", "cq_note:7:1", "revoked_sessions", "tg_offset", "gitlab_user",
+              "heartbeat", "last_poll_error", "reject:5"):
+        s.kv_set(k, "1")
+    deleted = s.reset()
+    assert deleted["mrs"] == 1 and deleted["events"] == 1 and deleted["kv"] == 3
+    assert s.counts() == {"mrs": 0, "events": 0, "violations": 0, "ai_calls": 0}
+    assert s.kv_get("cq_commit:7:a") and s.kv_get("revoked_sessions") and s.kv_get("tg_offset")
+    assert s.kv_get("heartbeat") is None and s.kv_get("reject:5") is None
+    s.reset(everything=True)
+    assert s.kv_get("cq_commit:7:a") is None

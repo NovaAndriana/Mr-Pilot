@@ -6,12 +6,13 @@ MR Pilot - instal & kelola dengan Docker Desktop (Windows).
   setup.bat ci               pasang CI/CD (GitHub/GitLab) + deploy otomatis ke server
   setup.bat update | start | stop | restart | status | logs | doctor | config | shell | demo
   setup.bat password [-Reset]   lihat / buat ulang password dashboard
+  setup.bat reset [-All] [-Yes] hapus riwayat MR, aktivitas & log (token/.env, config, standar tetap)
 
 Opsi: -Server  -Port 8787  -WithClaudeCode  -WithOllama  -OllamaModel qwen2.5-coder:14b  -Yes
 #>
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("install", "update", "ci", "start", "stop", "restart", "status", "logs", "doctor", "config", "shell", "demo", "password")]
+  [ValidateSet("install", "update", "ci", "start", "stop", "restart", "status", "logs", "doctor", "config", "shell", "demo", "password", "reset")]
   [string]$Command = "install",
   [switch]$Server,
   [switch]$Local,
@@ -20,7 +21,8 @@ param(
   [switch]$WithOllama,
   [string]$OllamaModel = "",
   [switch]$Yes,
-  [switch]$Reset
+  [switch]$Reset,
+  [switch]$All
 )
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
@@ -159,6 +161,18 @@ switch ($Command) {
   "stop" { Ensure-Docker; DC down }
   "restart" { Ensure-Docker; DC restart mr-pilot; Wait-Healthy }
   "status" { Ensure-Docker; DC ps }
+  "reset" {
+    Ensure-Docker
+    docker compose stop mr-pilot 2>$null | Out-Null   # database tidak boleh sedang dipakai
+    $rargs = @("reset"); if ($Yes) { $rargs += "--yes" }; if ($All) { $rargs += "--all" }
+    docker compose run --rm mr-pilot @rargs
+    if ($LASTEXITCODE -eq 0) {
+      DC up -d --force-recreate mr-pilot   # container baru = riwayat log Docker juga bersih
+      Wait-Healthy
+    } else {
+      docker compose start mr-pilot 2>$null | Out-Null
+    }
+  }
   "logs" { Ensure-Docker; docker compose logs -f --tail 100 mr-pilot }
   "doctor" { Ensure-Docker; docker compose run --rm -T mr-pilot doctor }
   "password" {

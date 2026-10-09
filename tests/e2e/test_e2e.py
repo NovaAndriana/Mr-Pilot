@@ -892,3 +892,44 @@ def test_31_logout_revokes_session(w):
         assert ex.code == 303 and ex.headers["Location"] == "/login?e=3"
         assert "Max-Age=0" in ex.headers["Set-Cookie"]
     assert http(w, "/api/summary", headers=hdr)[0] == 401, "token lama harus dicabut"
+
+
+def test_32_reset_clears_history_keeps_keys(w):
+    cfgp = os.path.join(w.data, "config.yaml")
+    envp = os.path.join(w.data, ".env")
+    with open(envp, "rb") as f:
+        env_before = f.read()
+    run = lambda *args, inp="": subprocess.run(  # noqa: E731
+        [sys.executable, "-m", "mr_pilot", "reset", "--config", cfgp, *args], cwd=ROOT,
+        env=w.env, input=inp, capture_output=True, text=True, timeout=60)
+    assert db_status(w, "7:540") == "notified"
+    # refuses while MR Pilot is running
+    r = run("--yes")
+    assert r.returncode == 1 and "masih berjalan" in r.stdout
+    w.app.signal(signal.SIGTERM)
+    assert w.app.wait_exit(40) == 0
+    # cancel = nothing deleted
+    r = run(inp="tidak\n")
+    assert r.returncode == 1 and "Dibatalkan" in r.stdout and db_status(w, "7:540") == "notified"
+    comments = len(w.gl.commit_comments)
+    r = run(inp="RESET\n")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Riwayat MR" in r.stdout and "data/.env (token & API key)" in r.stdout
+    con = sqlite3.connect(os.path.join(w.data, "mr_pilot.db"))
+    try:
+        assert [con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                for t in ("mrs", "events", "violations", "ai_calls")] == [0, 0, 0, 0]
+        assert con.execute("SELECT COUNT(*) FROM kv WHERE k LIKE 'cq_%'").fetchone()[0] > 0
+    finally:
+        con.close()
+    assert not os.listdir(os.path.join(w.data, "logs")), "log lama harus terhapus"
+    with open(envp, "rb") as f:
+        assert f.read() == env_before, ".env (token) tidak boleh berubah"
+    assert os.path.exists(cfgp) and os.path.isdir(os.path.join(w.data, "standards"))
+    # start again: still-open assigned MRs come back as fresh cards, no duplicate GitLab comments
+    n = len(w.tg.sent)
+    w.app.start()
+    wait(lambda: w.tg.find("MR Pilot aktif", n), 40, "start setelah reset")
+    cek(w)
+    card(w, 540, n)
+    assert len(w.gl.commit_comments) == comments, "komentar commit tidak boleh diposting ulang"

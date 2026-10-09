@@ -193,6 +193,31 @@ class Store:
             self.db.commit()
         return n
 
+    # kv entries that are NOT history: GitLab "already posted" markers (prevent duplicate comments),
+    # logged-out sessions, Telegram update offset, cached GitLab username
+    KEEP_KV = ("cq_%", "revoked_sessions", "tg_offset", "gitlab_user")
+
+    def reset(self, everything=False):
+        """Delete history (MRs, activity, violations, AI stats, transient kv). Returns {table: rows}."""
+        out = {}
+        with self.lock:
+            for t in ("mrs", "events", "violations", "ai_calls"):
+                out[t] = self.db.execute(f"DELETE FROM {t}").rowcount
+            if everything:
+                out["kv"] = self.db.execute("DELETE FROM kv").rowcount
+            else:
+                cond = " AND ".join("k NOT LIKE ?" for _ in self.KEEP_KV)
+                out["kv"] = self.db.execute(f"DELETE FROM kv WHERE {cond}", self.KEEP_KV).rowcount
+            self.db.execute("DELETE FROM sqlite_sequence WHERE name IN ('events','violations','ai_calls')")
+            self.db.commit()
+            self.db.execute("VACUUM")  # really drop the old data from the file
+        return out
+
+    def counts(self):
+        with self.lock:
+            return {t: self.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                    for t in ("mrs", "events", "violations", "ai_calls")}
+
     def integrity_ok(self):
         with self.lock:
             return self.db.execute("PRAGMA quick_check").fetchone()[0] == "ok"

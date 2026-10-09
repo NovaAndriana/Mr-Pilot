@@ -48,6 +48,57 @@ def cmd_health(config_path):
     return 0 if age < limit else 1
 
 
+def cmd_reset(cfg, data_dir, a):
+    """Hapus riwayat (MR, aktivitas, pelanggaran, statistik AI, log). .env, config, standar, AI tetap."""
+    import glob
+    from .store import Store
+    hb = os.path.join(data_dir, ".heartbeat")
+    try:
+        running = time.time() - os.path.getmtime(hb) < 90
+    except OSError:
+        running = False
+    if running and not a.force:
+        print("MR Pilot sepertinya masih berjalan. Hentikan dulu (setup.bat stop / ./setup.sh stop),\n"
+              "atau pakai `setup.bat reset` yang menghentikan dan menyalakan ulang otomatis.")
+        return 1
+    db = cfg["storage"]["db_path"]
+    log_file = cfg["storage"]["log_file"]
+    logs = sorted(glob.glob(log_file + "*"))
+    store = Store(db) if os.path.exists(db) else None
+    counts = store.counts() if store else {}
+    print("Yang akan DIHAPUS:")
+    print(f"  - Riwayat MR             : {counts.get('mrs', 0)}")
+    print(f"  - Aktivitas / events     : {counts.get('events', 0)}")
+    print(f"  - Pelanggaran standar    : {counts.get('violations', 0)}")
+    print(f"  - Statistik panggilan AI : {counts.get('ai_calls', 0)}")
+    print(f"  - File log               : {len(logs)} file ({os.path.dirname(log_file)})")
+    print("Yang TETAP: data/.env (token & API key), config.yaml, standards/, pengaturan AI, password dashboard.")
+    if a.all:
+        print("--all: penanda komentar yang sudah diposting ke GitLab ikut dihapus "
+              "(warning di commit lama bisa diposting ulang).")
+    if not a.yes:
+        try:
+            ans = input("Ketik RESET untuk melanjutkan: ").strip()
+        except EOFError:
+            ans = ""
+        if ans != "RESET":
+            print("Dibatalkan, tidak ada yang dihapus.")
+            return 1
+    deleted = store.reset(everything=a.all) if store else {}
+    if store:
+        store.db.close()
+    gone = 0
+    for f in logs + [hb]:
+        try:
+            os.remove(f)
+            gone += f in logs
+        except OSError:
+            pass
+    print(f"Selesai: {sum(v for k, v in deleted.items() if k != 'kv')} baris riwayat dan {gone} file log dihapus.")
+    print("MR yang masih terbuka dan di-assign ke Anda akan dikirim ulang sebagai kartu baru saat MR Pilot jalan.")
+    return 0
+
+
 def cmd_password(cfg, data_dir, a):
     """Tampilkan / ganti password dashboard. Sumbernya DASHBOARD_PASSWORD di <data>/.env."""
     import secrets
@@ -77,9 +128,11 @@ def cmd_password(cfg, data_dir, a):
 def main(argv=None):
     p = argparse.ArgumentParser(prog="mr_pilot", description="Auto review + merge MR GitLab via Telegram")
     p.add_argument("command", nargs="?", default="run",
-                   choices=["run", "setup", "doctor", "setup-ci", "demo", "dashboard", "password", "health"],
+                   choices=["run", "setup", "doctor", "setup-ci", "demo", "dashboard", "password", "health",
+                            "reset"],
                    help="run (default) | setup: wizard konfigurasi | doctor: cek koneksi | "
-                        "setup-ci: pasang CI/CD + deploy | demo: dashboard data contoh")
+                        "setup-ci: pasang CI/CD + deploy | demo: dashboard data contoh | "
+                        "reset: hapus riwayat & log (token/.env tetap)")
     p.add_argument("--config", default=os.environ.get("MRP_CONFIG", "config.yaml"))
     p.add_argument("--version", action="version", version=f"MR Pilot {__version__}")
     p.add_argument("--non-interactive", action="store_true", help="setup/setup-ci: ambil jawaban dari env")
@@ -87,6 +140,9 @@ def main(argv=None):
     p.add_argument("--no-ai-test", action="store_true", help="doctor: jangan panggil AI")
     p.add_argument("--reset", action="store_true", help="password: buat password dashboard baru")
     p.add_argument("--set", dest="set_password", metavar="PASSWORD", help="password: pakai password ini")
+    p.add_argument("--yes", action="store_true", help="reset: tanpa konfirmasi")
+    p.add_argument("--all", action="store_true", help="reset: hapus juga penanda komentar GitLab")
+    p.add_argument("--force", action="store_true", help="reset: jalankan walau MR Pilot terdeteksi masih jalan")
     p.add_argument("--once", action="store_true", help="cek GitLab sekali lalu keluar")
     p.add_argument("--dry-run", action="store_true", help="tidak kirim apa pun, hanya cetak")
     p.add_argument("--get-chat-id", action="store_true", help="tampilkan chat id Telegram Anda")
@@ -149,6 +205,8 @@ def main(argv=None):
         if os.environ.get("MRP_IN_DOCKER") == "1" and a.command == "run":
             time.sleep(30)  # restart policy: don't spin
         sys.exit(2)
+    if a.command == "reset":  # before logging opens (and locks, on Windows) the log file
+        sys.exit(cmd_reset(cfg, data_dir, a))
     if a.command == "demo":
         import tempfile
         cfg["storage"]["log_file"] = os.path.join(tempfile.gettempdir(), "mr-pilot-demo.log")
@@ -281,6 +339,10 @@ def main(argv=None):
                     time.sleep(1)
             except (Stop, KeyboardInterrupt):
                 break
+    try:  # clean stop: no stale heartbeat (reset/health must not think we're still running)
+        os.remove(app.heartbeat_path)
+    except OSError:
+        pass
     logging.info("MR Pilot berhenti.")
 
 

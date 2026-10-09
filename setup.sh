@@ -6,15 +6,17 @@
 #   ./setup.sh ci              pasang CI/CD (GitHub/GitLab) + deploy otomatis ke server
 #   ./setup.sh update | start | stop | restart | status | logs | doctor | config | shell | demo
 #   ./setup.sh password [--reset]   lihat / buat ulang password dashboard
+#   ./setup.sh reset [--all] [-y]   hapus riwayat MR, aktivitas & log (token/.env, config, standar tetap)
 #
 # Opsi: --server  --port N  --with-claude-code  --with-ollama[=model]  --non-interactive  -y
 set -euo pipefail
 cd "$(dirname "$0")"
 
-CMD=install; PW_RESET=0; BIND=""; PORT=""; CLAUDE=""; OLLAMA=""; OLLAMA_MODEL=""; NONINT=0; YES=0
+CMD=install; PW_RESET=0; ALL=0; BIND=""; PORT=""; CLAUDE=""; OLLAMA=""; OLLAMA_MODEL=""; NONINT=0; YES=0
 for arg in "$@"; do
   case "$arg" in
-    install|update|ci|start|stop|restart|status|logs|doctor|config|shell|demo|password) CMD=$arg ;;
+    install|update|ci|start|stop|restart|status|logs|doctor|config|shell|demo|password|reset) CMD=$arg ;;
+    --all) ALL=1 ;;
     --reset) PW_RESET=1 ;;
     --server) BIND=0.0.0.0 ;;
     --local) BIND=127.0.0.1 ;;
@@ -144,6 +146,15 @@ case "$CMD" in
   stop) ensure_docker; dc down ;;
   restart) ensure_docker; dc restart mr-pilot; wait_healthy || true ;;
   status) ensure_docker; dc ps ;;
+  reset)
+    ensure_docker
+    dc stop mr-pilot >/dev/null 2>&1 || true   # database must not be in use
+    rargs=(reset); [ "$YES" = 1 ] && rargs+=(--yes); [ "$ALL" = 1 ] && rargs+=(--all)
+    if dc run --rm mr-pilot "${rargs[@]}"; then
+      dc up -d --force-recreate mr-pilot && wait_healthy || true   # new container = Docker log history cleared too
+    else
+      dc start mr-pilot >/dev/null 2>&1 || true
+    fi ;;
   logs) ensure_docker; dc logs -f --tail 100 mr-pilot ;;
   doctor) ensure_docker; dc run --rm -T mr-pilot doctor ;;
   password)

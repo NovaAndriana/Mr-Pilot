@@ -55,7 +55,10 @@ setup.bat stop|start  ./setup.sh stop|start
 setup.bat demo        ./setup.sh demo        dashboard dengan data contoh (password: demo)
 setup.bat password    ./setup.sh password    lihat password dashboard yang aktif (-Reset / --reset = buat baru)
 setup.bat ci          ./setup.sh ci          pasang CI/CD + deploy otomatis (bagian 5)
+setup.bat reset       ./setup.sh reset       hapus riwayat MR, aktivitas, statistik & log (minta konfirmasi "RESET")
 ```
+
+**`reset`** cocok setelah masa uji coba. Yang dihapus: riwayat MR, aktivitas, pelanggaran standar, statistik AI, file log, dan riwayat log Docker. Yang **tetap**: `data/.env` (token GitLab/Telegram, API key AI), `config.yaml`, `standards/`, pengaturan AI, dan password dashboard. MR yang masih terbuka dan di-assign ke Anda akan dikirim ulang sebagai kartu baru. Penanda "komentar sudah diposting" sengaja disimpan supaya warning di commit lama tidak diposting dobel ke GitLab; tambahkan `-All` / `--all` kalau ingin benar-benar kosong. `-Yes` / `-y` melewati konfirmasi. Komentar yang sudah ada di GitLab dan pesan lama di Telegram tidak ikut terhapus.
 Opsi install: `--with-claude-code` (CLI Claude Code ikut dipasang di image), `--with-ollama[=model]` (AI lokal di Docker), `--port 8787`, `--non-interactive` (semua jawaban dari env, untuk otomasi).
 
 ### 1a. Token GitLab (cukup SATU token untuk semua repo)
