@@ -56,6 +56,7 @@ setup.bat demo        ./setup.sh demo        dashboard dengan data contoh (passw
 setup.bat password    ./setup.sh password    lihat password dashboard yang aktif (-Reset / --reset = buat baru)
 setup.bat ci          ./setup.sh ci          pasang CI/CD + deploy otomatis (bagian 5)
 setup.bat reset       ./setup.sh reset       hapus riwayat MR, aktivitas, statistik & log (minta konfirmasi "RESET")
+setup.bat trust-cert  ./setup.sh trust-cert  percayai sertifikat SSL GitLab kantor (error CERTIFICATE_VERIFY_FAILED)
 ```
 
 **`reset`** cocok setelah masa uji coba. Yang dihapus: riwayat MR, aktivitas, pelanggaran standar, statistik AI, file log, dan riwayat log Docker. Yang **tetap**: `data/.env` (token GitLab/Telegram, API key AI), `config.yaml`, `standards/`, pengaturan AI, dan password dashboard. MR yang masih terbuka dan di-assign ke Anda akan dikirim ulang sebagai kartu baru. Penanda "komentar sudah diposting" sengaja disimpan supaya warning di commit lama tidak diposting dobel ke GitLab; tambahkan `-All` / `--all` kalau ingin benar-benar kosong. `-Yes` / `-y` melewati konfirmasi. Komentar yang sudah ada di GitLab dan pesan lama di Telegram tidak ikut terhapus.
@@ -243,7 +244,7 @@ Deploy di server menjalankan `deploy/remote-deploy.sh`: login registry (token di
 
 | Gejala | Solusi |
 |---|---|
-| `SSL: CERTIFICATE_VERIFY_FAILED` ke GitLab | `gitlab.verify_ssl: false` |
+| `CERTIFICATE_VERIFY_FAILED` / "Sertifikat SSL ... tidak dipercaya" | GitLab kantor memakai CA internal, SSL inspection, atau intermediate tidak lengkap. Jalankan **`setup.bat trust-cert`** (Windows mengambil rantai sertifikat yang ia percaya dan menyimpannya ke `data\certs`, lalu MR Pilot di-restart). Di Linux: `./setup.sh trust-cert`. Bisa juga taruh file CA dari tim IT (`.crt`/`.cer`/`.pem`) di `data/certs/`. Darurat saja: `GITLAB_VERIFY_SSL=false` di `data/.env` |
 | Telegram timeout | Jaringan kantor memblokir Telegram, isi `telegram.proxy` |
 | Selalu "menunggu komentar bot" | Cek `review.bot.usernames` / `marker` sesuai akun bot di MR |
 | Teams `gagal: HTTP 4xx` | URL flow salah/kedaluwarsa, atau flow nonaktif. Cek *Run history* di Power Automate |

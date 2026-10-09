@@ -7,12 +7,13 @@ MR Pilot - instal & kelola dengan Docker Desktop (Windows).
   setup.bat update | start | stop | restart | status | logs | doctor | config | shell | demo
   setup.bat password [-Reset]   lihat / buat ulang password dashboard
   setup.bat reset [-All] [-Yes] hapus riwayat MR, aktivitas & log (token/.env, config, standar tetap)
+  setup.bat trust-cert [-Url https://...]  percayai sertifikat SSL GitLab kantor (error CERTIFICATE_VERIFY_FAILED)
 
 Opsi: -Server  -Port 8787  -WithClaudeCode  -WithOllama  -OllamaModel qwen2.5-coder:14b  -Yes
 #>
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("install", "update", "ci", "start", "stop", "restart", "status", "logs", "doctor", "config", "shell", "demo", "password", "reset")]
+  [ValidateSet("install", "update", "ci", "start", "stop", "restart", "status", "logs", "doctor", "config", "shell", "demo", "password", "reset", "trust-cert")]
   [string]$Command = "install",
   [switch]$Server,
   [switch]$Local,
@@ -22,7 +23,8 @@ param(
   [string]$OllamaModel = "",
   [switch]$Yes,
   [switch]$Reset,
-  [switch]$All
+  [switch]$All,
+  [string]$Url = ""
 )
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
@@ -67,8 +69,16 @@ function Repair-EnvFile {
 function Invoke-DockerQuiet {
   $old = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
-  try { & docker @args *> $null } finally { $ErrorActionPreference = $old }
+  try { & docker @args *> $null } catch { return 127 } finally { $ErrorActionPreference = $old }
   return $LASTEXITCODE
+}
+function Get-DockerOutput {
+  # stdout of a docker command ("" on failure), same stderr safety as Invoke-DockerQuiet
+  $old = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try { $o = & docker @args 2>$null } catch { return "" } finally { $ErrorActionPreference = $old }
+  if ($LASTEXITCODE -ne 0) { return "" }
+  return (($o | Out-String).Trim())
 }
 function Ensure-Docker {
   if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -93,6 +103,45 @@ function Ensure-Docker {
 }
 function DC { & docker compose @args; if ($LASTEXITCODE -ne 0) { throw "docker compose $($args -join ' ') gagal ($LASTEXITCODE)" } }
 
+function Export-TrustedChain([string]$url) {
+  # Ambil rantai sertifikat server SEPERTI DIPERCAYA WINDOWS (trust store Windows + unduh intermediate),
+  # lalu simpan penerbitnya ke data\certs agar MR Pilot di Docker ikut mempercayainya.
+  if (-not $url) { $url = Get-Kv "GITLAB_URL" "data\.env" }
+  if (-not $url) { throw "GITLAB_URL belum diisi. Jalankan setup.bat config atau pakai -Url https://..." }
+  $u = [Uri]$url
+  $hostName = $u.Host; $port = if ($u.Port -gt 0) { $u.Port } else { 443 }
+  Say "Mengambil sertifikat $hostName`:$port"
+  $tcp = New-Object Net.Sockets.TcpClient($hostName, $port)
+  try {
+    $cb = [Net.Security.RemoteCertificateValidationCallback] { param($s, $c, $ch, $e) $true }
+    $ssl = New-Object Net.Security.SslStream($tcp.GetStream(), $false, $cb)
+    $ssl.AuthenticateAsClient($hostName, $null, [Security.Authentication.SslProtocols]::Tls12, $false)
+    $leaf = New-Object Security.Cryptography.X509Certificates.X509Certificate2($ssl.RemoteCertificate)
+  } finally { $tcp.Close() }
+  $chain = New-Object Security.Cryptography.X509Certificates.X509Chain
+  $chain.ChainPolicy.RevocationMode = "NoCheck"
+  $trusted = $chain.Build($leaf)
+  $issuers = @($chain.ChainElements | ForEach-Object { $_.Certificate } | Select-Object -Skip 1)
+  if ($issuers.Count -eq 0) {
+    Write-Host "Windows juga tidak menemukan penerbit sertifikat $hostName." -ForegroundColor Red
+    Write-Host "Minta file sertifikat CA (.crt/.cer) ke tim IT, taruh di data\certs, lalu setup.bat restart." -ForegroundColor Yellow
+    Write-Host "Darurat: isi GITLAB_VERIFY_SSL=false di data\.env." -ForegroundColor Yellow
+    exit 1
+  }
+  if (-not $trusted) { Write-Host "    Catatan: Windows sendiri belum sepenuhnya mempercayai rantai ini." -ForegroundColor Yellow }
+  New-Item -ItemType Directory -Force -Path "data\certs" | Out-Null
+  $sb = New-Object Text.StringBuilder
+  foreach ($c in $issuers) {
+    $b64 = [Convert]::ToBase64String($c.RawData)
+    [void]$sb.Append("# $($c.Subject)`n# berlaku s/d $($c.NotAfter.ToString('yyyy-MM-dd')), SHA1 $($c.Thumbprint)`n-----BEGIN CERTIFICATE-----`n")
+    for ($i = 0; $i -lt $b64.Length; $i += 64) { [void]$sb.Append($b64.Substring($i, [Math]::Min(64, $b64.Length - $i)) + "`n") }
+    [void]$sb.Append("-----END CERTIFICATE-----`n")
+    Write-Host "    + $($c.Subject)  (s/d $($c.NotAfter.ToString('yyyy-MM-dd')))"
+  }
+  $out = Join-Path (Resolve-Path "data\certs") "$hostName-chain.pem"
+  [IO.File]::WriteAllText($out, $sb.ToString(), (New-Object Text.UTF8Encoding($false)))
+  Say "Disimpan: data\certs\$hostName-chain.pem ($($issuers.Count) sertifikat)"
+}
 function Wait-Healthy {
   $p = Get-Kv "MRP_PORT"; if (-not $p) { $p = 8787 }
   Write-Host -NoNewline "    menunggu MR Pilot siap "
@@ -166,6 +215,14 @@ switch ($Command) {
   "start" { Ensure-Docker; DC up -d; Wait-Healthy; Summary }
   "stop" { Ensure-Docker; DC down }
   "restart" { Ensure-Docker; DC restart mr-pilot; Wait-Healthy }
+  "trust-cert" {
+    Export-TrustedChain $Url
+    if (Get-DockerOutput compose ps -q mr-pilot) {
+      Say "Restart MR Pilot agar sertifikat dipakai"
+      DC restart mr-pilot
+      Wait-Healthy
+    }
+  }
   "status" { Ensure-Docker; DC ps }
   "reset" {
     Ensure-Docker

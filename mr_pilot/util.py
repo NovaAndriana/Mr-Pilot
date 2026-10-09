@@ -1,6 +1,9 @@
 """Shared helpers: secret redaction (logs, events, Telegram), small HTTP retry session."""
+import glob
 import logging
+import os
 import re
+import ssl
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -78,3 +81,74 @@ def short_error(ex, limit=300):
     else:
         msg = str(ex) or ex.__class__.__name__
     return redact(msg)[:limit]
+
+
+# ------------------------------------------------------------- extra CAs
+CERT_GLOBS = ("*.crt", "*.pem", "*.cer")
+
+
+def _cert_text(path):
+    """PEM text of a certificate file (PEM or DER). None if it isn't a usable certificate."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    if b"-----BEGIN CERTIFICATE-----" in raw:
+        text = raw.decode("utf-8-sig", "replace")
+    else:
+        try:
+            text = ssl.DER_cert_to_PEM_cert(raw)
+        except Exception:
+            return None
+    try:
+        ssl.create_default_context().load_verify_locations(cadata=text)
+    except ssl.SSLError:
+        return None
+    return text.strip() + "\n"
+
+
+def install_extra_cas(data_dir, log=None):
+    """Trust the certificates in <data>/certs (company CA, GitLab's intermediate) for every HTTPS call:
+    writes <data>/.ca-bundle.pem = public roots + extras and points requests / Python / Node at it.
+    Returns (bundle_path, used_files, skipped_files) or (None, [], []) when there is nothing to add."""
+    log = log or logging.getLogger("mr_pilot")
+    files = sorted({p for g in CERT_GLOBS for p in glob.glob(os.path.join(data_dir, "certs", g))})
+    if not files:
+        return None, [], []
+    used, skipped, extras = [], [], []
+    for f in files:
+        text = _cert_text(f)
+        if text:
+            used.append(os.path.basename(f))
+            extras.append(text)
+        else:
+            skipped.append(os.path.basename(f))
+    if skipped:
+        log.warning("File sertifikat dilewati (bukan sertifikat yang valid): %s", ", ".join(skipped))
+    if not extras:
+        return None, [], skipped
+    import certifi
+    with open(certifi.where(), encoding="utf-8") as f:
+        roots = f.read()
+    bundle = os.path.join(data_dir, ".ca-bundle.pem")
+    extra_only = os.path.join(data_dir, ".ca-extra.pem")
+    for path, body in ((bundle, roots.rstrip() + "\n" + "".join(extras)), (extra_only, "".join(extras))):
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(body)
+        os.replace(tmp, path)
+    os.environ["REQUESTS_CA_BUNDLE"] = bundle   # requests (GitLab, Telegram, AI, Teams)
+    os.environ["SSL_CERT_FILE"] = bundle        # Python ssl default context
+    os.environ["NODE_EXTRA_CA_CERTS"] = extra_only  # Claude Code CLI (Node)
+    log.info("Sertifikat tambahan dipercaya: %s", ", ".join(used))
+    return bundle, used, skipped
+
+
+def ssl_hint(ex):
+    """Friendly one-liner for TLS failures, else None."""
+    text = str(ex)
+    if isinstance(ex, requests.exceptions.SSLError) or "CERTIFICATE_VERIFY_FAILED" in text:
+        host = re.search(r"host='([^']+)'", text)
+        host = host.group(1) if host else "server"
+        return (f"Sertifikat SSL {host} tidak dipercaya (CA kantor / sertifikat intermediate tidak lengkap). "
+                f"Jalankan `setup.bat trust-cert` (Windows) atau `./setup.sh trust-cert` lalu restart. "
+                f"Darurat: GITLAB_VERIFY_SSL=false di data/.env.")
+    return None

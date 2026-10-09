@@ -11,7 +11,9 @@ from logging.handlers import RotatingFileHandler
 
 from . import __version__
 from .config import ConfigError, load_config, require
-from .util import RedactingFilter
+import requests
+
+from .util import RedactingFilter, install_extra_cas, short_error, ssl_hint
 
 
 def setup_logging(path):
@@ -160,6 +162,8 @@ def main(argv=None):
     if a.command == "health":
         sys.exit(cmd_health(a.config))
     data_dir = os.path.dirname(os.path.abspath(a.config))
+    # company CA / missing intermediate: trust <data>/certs for every HTTPS call (setup and doctor too)
+    _ca_bundle, _ca_used, _ = install_extra_cas(data_dir, logging.getLogger("mr_pilot.tls"))
     if a.demo:
         a.command = "demo"
     elif a.dashboard_only:
@@ -211,6 +215,8 @@ def main(argv=None):
         import tempfile
         cfg["storage"]["log_file"] = os.path.join(tempfile.gettempdir(), "mr-pilot-demo.log")
     setup_logging(cfg["storage"]["log_file"])
+    if _ca_used:
+        logging.info("Sertifikat tambahan dari data/certs dipercaya: %s", ", ".join(_ca_used))
 
     if a.command == "password":
         sys.exit(cmd_password(cfg, data_dir, a))
@@ -330,8 +336,13 @@ def main(argv=None):
             app.run_forever()
         except (Stop, KeyboardInterrupt):
             break
-        except Exception:
-            logging.exception("Crash, mulai ulang 30 detik lagi")
+        except Exception as ex:
+            hint = ssl_hint(ex) or (f"Tidak bisa terhubung: {short_error(ex)}"
+                                    if isinstance(ex, requests.ConnectionError) else None)
+            if hint:  # known, user-fixable: one clear line instead of a traceback every 30 s
+                logging.error("%s Coba lagi 30 detik lagi.", hint)
+            else:
+                logging.exception("Crash, mulai ulang 30 detik lagi")
             try:
                 for _ in range(30):
                     if app.stop_requested:
