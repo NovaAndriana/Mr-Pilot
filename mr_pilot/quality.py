@@ -93,7 +93,7 @@ class CodeQuality:
         # 2) current state of the whole MR (what would land if merged)
         diffs = self.gl.get_diffs(pid, iid)
         current = self.std.check_diffs(diffs, self.ignore)
-        current += self.std.check_title(mr.get("title"))
+        current += self.std.check_title(mr.get("title"), mr.get("source_branch"))
         current += self.std.check_checklist(mr.get("description"))
 
         # 3) AI check against the written standards (only for a new head sha)

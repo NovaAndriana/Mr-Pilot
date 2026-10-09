@@ -180,12 +180,16 @@ class Standards:
         return out
 
     # --------------------------------------------------------- conventions
-    def check_title(self, title):
+    def check_title(self, title, branch=None):
         pat = (self.cfg.get("conventions") or {}).get("mr_title_pattern")
         if pat and not re.search(pat, title or ""):
-            return [violation("mr-title-convention", "warning",
-                              f"Judul MR tidak sesuai konvensi `{pat}`. Contoh: feat(IDAS-123): deskripsi singkat",
-                              source="convention", snippet=title)]
+            hint = suggest_title(title, branch)
+            if hint and not re.search(pat, hint):
+                hint = None
+            msg = "Judul MR belum mengikuti format `tipe(TIKET): deskripsi`, mis. `feat(IDAS-123): tampilkan kuota`."
+            if hint:
+                msg += f" Saran: `{hint}`"
+            return [violation("mr-title-convention", "warning", msg, source="convention", snippet=title)]
         return []
 
     def check_commit_message(self, message):
@@ -210,23 +214,33 @@ class Standards:
         return items
 
     def check_checklist(self, description):
+        """off | present | warn_unchecked (default: the MR's OWN checklist must be ticked, whatever its items)
+        | match_template (also every item of the pr_checklist file must be in the MR)."""
         conv = self.cfg.get("conventions") or {}
-        mode = conv.get("require_pr_checklist", "warn_unchecked")  # off | present | warn_unchecked
+        mode = conv.get("require_pr_checklist", "warn_unchecked")
         if mode in (False, "off", None):
             return []
-        expected = self.checklist_items()
-        if not expected:
-            return []
-        found = {}
+        found, labels = {}, {}
         for line in (description or "").splitlines():
             m = _CHECKBOX.match(line)
             if m:
                 found[_norm(m.group(2))] = m.group(1).lower() == "x"
+                labels[_norm(m.group(2))] = m.group(2).strip()
         if not found:
-            return [violation("pr-checklist-missing", "warning",
-                              "Deskripsi MR belum memuat PR Checklist. Salin dari template PR Checklist.",
+            return [violation("pr-checklist-missing", "info",
+                              "Deskripsi MR belum memuat checklist (kotak - [ ]). Pakai template MR tim.",
                               source="convention")]
         if mode == "present":
+            return []
+        if mode != "match_template":
+            unchecked = [labels[k] for k, done in found.items() if not done]
+            if not unchecked:
+                return []
+            return [violation("pr-checklist-unchecked", "info",
+                              f"{len(unchecked)} item checklist belum dicentang: " + "; ".join(unchecked[:5]),
+                              source="convention")]
+        expected = self.checklist_items()
+        if not expected:
             return []
         unchecked = [it for it in expected if found.get(_norm(it)) is False]
         missing = [it for it in expected if _norm(it) not in found]
@@ -240,6 +254,31 @@ class Standards:
                                  f"{len(missing)} item checklist tidak ada: " + "; ".join(missing[:5]),
                                  source="convention"))
         return out
+
+
+_TICKET = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z]+)[-_ ]?(\d+)(?!\d)")
+_TYPES = ("feat", "fix", "refactor", "perf", "test", "docs", "chore", "ci", "build", "revert")
+_TYPE_ALIASES = {"feature": "feat", "bugfix": "fix", "hotfix": "fix", "bug": "fix", "doc": "docs"}
+
+
+def suggest_title(title, branch=None):
+    """Conventional title from what the author already wrote: 'Idas 5327/fix role signature' or branch
+    'IDAS-5327/fix-role-signature' -> 'fix(IDAS-5327): role signature'."""
+    for src in (branch or "", title or ""):
+        m = _TICKET.search(src)
+        if not m:
+            continue
+        ticket = f"{m.group(1).upper()}-{m.group(2)}"
+        rest = re.split(r"[/\s_-]+", (src[:m.start()] + " " + src[m.end():]).strip(" /:-_"))
+        words = [w for w in rest if w]
+        kind = None
+        if words and (words[0].lower() in _TYPES or words[0].lower() in _TYPE_ALIASES):
+            w = words.pop(0).lower()
+            kind = _TYPE_ALIASES.get(w, w)
+        if not words:
+            continue
+        return f"{kind or 'feat'}({ticket}): {' '.join(words).lower()}"
+    return None
 
 
 def _norm(s):
