@@ -92,7 +92,7 @@ DEFAULTS = {
             "commit_status": True,
             "status_name": "code-standard",
             "status_fail_on": "none",
-            "comment_footer": "Pengecekan standar kode otomatis",
+            "comment_footer": "",
         },
     },
     "ai": {

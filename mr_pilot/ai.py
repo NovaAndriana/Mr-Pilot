@@ -13,6 +13,7 @@ import time
 
 import requests
 
+from .quota import QuotaGuard, fmt_num, headers_meta
 from .util import short_error
 
 log = logging.getLogger("mr_pilot.ai")
@@ -35,7 +36,8 @@ TYPES = {
     "local": {"label": "Local (Ollama / LM Studio / vLLM)", "base_url": "http://localhost:11434/v1",
               "model": "qwen2.5-coder:14b", "needs_key": False, "key_env": ""},
 }
-EDITABLE = ("enabled", "model", "base_url", "label", "cli_path", "timeout", "temperature")
+EDITABLE = ("enabled", "model", "base_url", "label", "cli_path", "timeout", "temperature",
+            "daily_requests", "daily_tokens", "rpm")
 
 
 def claude_missing_msg():
@@ -46,7 +48,10 @@ def claude_missing_msg():
 
 
 class AIError(Exception):
-    pass
+    def __init__(self, msg, status=None, retry_after=None):
+        super().__init__(msg)
+        self.status = status
+        self.retry_after = retry_after
 
 
 def in_docker():
@@ -102,7 +107,16 @@ class AIManager:
         self.override_path = os.path.join(base_dir, (cfg.get("ai") or {}).get("overrides_file") or "ai_overrides.json")
         self.lock = threading.RLock()
         self._mtime = None
+        self.quota = QuotaGuard(store)
         self.reload(force=True)
+
+    @property
+    def notify(self):
+        return self.quota.notify
+
+    @notify.setter
+    def notify(self, fn):  # App wires Telegram here for quota alerts
+        self.quota.notify = fn
 
     # ------------------------------------------------------------ config
     def _load_overrides(self):
@@ -233,7 +247,9 @@ class AIManager:
                         "model": p.get("model"), "base_url": p.get("base_url"), "enabled": bool(p.get("enabled")),
                         "ready": ok, "reason": why, "needs_key": TYPES[p["type"]]["needs_key"],
                         "key_set": bool(key), "key_hint": ("…" + key[-4:]) if len(key) > 8 else ("terisi" if key else ""),
-                        "key_env": TYPES[p["type"]]["key_env"], "custom": bool(p.get("_custom"))})
+                        "key_env": TYPES[p["type"]]["key_env"], "custom": bool(p.get("_custom")),
+                        "quota": self.quota.state(p), "limits_custom": {k: p.get(k) for k in
+                                                                         ("daily_requests", "daily_tokens", "rpm")}})
         return {"providers": out, "order": self.order, "tasks": self.tasks, "task_labels": TASKS,
                 "types": {k: {"label": v["label"], "model": v["model"], "base_url": v["base_url"],
                               "needs_key": v["needs_key"]} for k, v in TYPES.items()}}
@@ -243,14 +259,30 @@ class AIManager:
         """Try providers in order; returns (text, provider_name). Raises AIError if all fail.
         validate(text) may raise to reject a reply (e.g. broken JSON) -> next provider is tried."""
         errors = []
-        for name in self.chain(task):
+        chain = [n for n in self.chain(task) if self.ready(self.providers[n])[0]]
+        for i, name in enumerate(chain):
             p = self.providers[name]
-            ok, why = self.ready(p)
-            if not ok:
+            st = self.quota.state(p)
+            if st["level"] == "exhausted":
+                errors.append(f"{name}: {st['why']}")
+                if not st["cooldown_until"]:  # own daily limit reached (cooldowns already alerted)
+                    self.quota.alert(name, "exhausted", f"⛔ AI <b>{name}</b>: batas harian yang Anda set sudah "
+                                                        f"tercapai ({self._usage_text(st)} dalam 24 jam). "
+                                                        f"Dilewati dulu; provider berikutnya yang dipakai. Cek /kuota.")
                 continue
+            self._quota_notice(p, st)
+            wait = self.quota.minute_wait(p)
+            if wait > 0:
+                others = [n for n in chain[i + 1:] if self.quota.state(self.providers[n])["level"] != "exhausted"]
+                if others:
+                    errors.append(f"{name}: batas per menit")
+                    continue
+                log.info("AI %s: batas per menit, tunggu %.0f detik", name, wait)
+                time.sleep(min(wait, 65))
             t0 = time.time()
+            meta = {}
             try:
-                text = self.call(p, system, user)
+                text, meta = self._call(p, system, user)
                 if not text or not text.strip():
                     raise AIError("respons kosong")
                 if validate:
@@ -258,16 +290,79 @@ class AIManager:
                         validate(text)
                     except Exception as vex:
                         raise AIError(f"jawaban tidak valid: {vex}") from None
-                self._log(name, task, True, t0)
+                self._log(name, task, True, t0, "", meta)
                 return text, name
             except Exception as ex:
                 msg = _short_err(ex)
                 errors.append(f"{name}: {msg}")
-                self._log(name, task, False, t0, msg)
+                self._log(name, task, False, t0, msg, meta)
+                if isinstance(ex, AIError) and ex.status:
+                    self.quota.record_failure(name, ex.status, msg, ex.retry_after)
                 log.warning("AI %s gagal (%s), coba provider berikutnya", name, msg)
         if not errors:
             raise AIError("Tidak ada provider AI yang aktif dan siap. Atur di dashboard > AI.")
+        if chain and all(self.quota.state(self.providers[n])["level"] == "exhausted" for n in chain):
+            self.quota.alert("*", "all", "⛔ <b>Semua provider AI habis kuota.</b> Review memakai cek otomatis "
+                                         "saja sampai kuota pulih. Tambah provider lain di dashboard > AI.")
         raise AIError("Semua provider AI gagal: " + " | ".join(errors))
+
+    @staticmethod
+    def _usage_text(st):
+        u, lim = st["usage"], st["limits"]
+        parts = []
+        if lim["daily_requests"]:
+            parts.append(f"{u['requests']}/{lim['daily_requests']} request")
+        if lim["daily_tokens"]:
+            parts.append(f"{fmt_num(u['tokens'])}/{fmt_num(lim['daily_tokens'])} token")
+        return ", ".join(parts) or f"{u['requests']} request"
+
+    def _quota_notice(self, p, st):
+        if st["level"] == "low" and st["ratio"] is not None:
+            self.quota.alert(p["name"], "low", f"⚠️ Pemakaian AI <b>{p['name']}</b> sudah {int(st['ratio'] * 100)}% "
+                                               f"({self._usage_text(st)} dalam 24 jam). Mode hemat aktif: pengecekan "
+                                               f"tambahan dilewati dulu. Cek /kuota.")
+
+    def economy(self, task="review"):
+        """True when the provider that would answer is at >= 80% of its free limit (or none is left):
+        callers skip optional AI calls (second-opinion pass, pipeline analysis, AI standards check)."""
+        for name in self.chain(task):
+            p = self.providers[name]
+            if not self.ready(p)[0]:
+                continue
+            st = self.quota.state(p)
+            if st["level"] == "exhausted":
+                continue
+            return st["level"] == "low"
+        return True
+
+    def quota_report(self):
+        """Plain-HTML summary for Telegram /kuota."""
+        self.reload()
+        lines = ["<b>Pemakaian AI (24 jam terakhir)</b>"]
+        for n in self.order:
+            p = self.providers[n]
+            ok, why = self.ready(p)
+            if not p.get("enabled"):
+                continue
+            st = self.quota.state(p)
+            u, lim = st["usage"], st["limits"]
+            req = f"{u['requests']}/{lim['daily_requests']}" if lim["daily_requests"] else f"{u['requests']}"
+            tok = f"{fmt_num(u['tokens'])}/{fmt_num(lim['daily_tokens'])}" if lim["daily_tokens"] else fmt_num(u["tokens"])
+            icon = {"ok": "🟢", "low": "🟡", "exhausted": "🔴"}[st["level"]] if ok else "⚪"
+            extra = ""
+            if not ok:
+                extra = f" · {why}"
+            elif st["level"] == "exhausted":
+                until = st.get("cooldown_until")
+                extra = f" · {st['why']}" + (f" s/d {time.strftime('%H:%M', time.localtime(until))}" if until else "")
+            elif not lim["daily_requests"] and not lim["daily_tokens"]:
+                extra = " · batas belum diisi"
+            rep = st.get("reported") or {}
+            if rep.get("remaining_requests") is not None:
+                extra += f" · sisa menurut provider: {rep['remaining_requests']} request"
+            lines.append(f"{icon} <b>{n}</b>: {req} request · {tok} token{extra}")
+        lines.append("\n<i>Batas gratis bisa diatur per provider di dashboard > AI > Atur.</i>")
+        return "\n".join(lines)
 
     def test(self, name):
         p = self.providers.get(name)
@@ -285,14 +380,21 @@ class AIManager:
             self._log(name, "test", False, t0, _short_err(ex))
             return {"ok": False, "ms": int((time.time() - t0) * 1000), "error": _short_err(ex)}
 
-    def _log(self, name, task, ok, t0, err=""):
+    def _log(self, name, task, ok, t0, err="", meta=None):
+        meta = meta or {}
         if self.store is not None:
             try:
-                self.store.add_ai_call(name, task, ok, int((time.time() - t0) * 1000), err)
+                self.store.add_ai_call(name, task, ok, int((time.time() - t0) * 1000), err,
+                                       int(meta.get("tokens_in") or 0), int(meta.get("tokens_out") or 0))
             except Exception:
                 log.exception("gagal mencatat pemakaian AI")
+        self.quota.record_headers(name, meta)
 
     def call(self, p, system, user):
+        return self._call(p, system, user)[0]
+
+    def _call(self, p, system, user):
+        """(text, meta) where meta has tokens_in/tokens_out and quota info the provider reported."""
         t = p["type"]
         timeout = int(p.get("timeout") or self.timeout)
         if t == "anthropic":
@@ -312,7 +414,9 @@ class AIManager:
                 msg = msg or j.get("message") or r.text[:200]
             except Exception:
                 msg = r.text[:200]
-            raise AIError(f"HTTP {r.status_code}: {msg}")
+            hm = headers_meta(r.headers)
+            raise AIError(f"HTTP {r.status_code}: {msg}", status=r.status_code,
+                          retry_after=hm.get("retry_after") or (hm.get("reset_requests") if r.status_code == 429 else None))
 
     def _anthropic(self, p, system, user, timeout):
         r = requests.post(p["base_url"] + "/v1/messages", timeout=timeout, headers={
@@ -320,7 +424,11 @@ class AIManager:
             json={"model": p["model"], "max_tokens": int(p.get("max_tokens") or 4000), "system": system,
                   "messages": [{"role": "user", "content": user}]})
         self._raise(r)
-        return "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
+        j = r.json()
+        u = j.get("usage") or {}
+        meta = {"tokens_in": (u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0),
+                "tokens_out": u.get("output_tokens") or 0, **headers_meta(r.headers)}
+        return "".join(b.get("text", "") for b in j.get("content", []) if b.get("type") == "text"), meta
 
     def _openai_compat(self, p, system, user, timeout):
         headers = {"Content-Type": "application/json"}
@@ -334,8 +442,12 @@ class AIManager:
             body["temperature"] = float(p.get("temperature") if p.get("temperature") is not None else 0.1)
         r = requests.post(p["base_url"] + "/chat/completions", headers=headers, json=body, timeout=timeout)
         self._raise(r)
-        msg = r.json()["choices"][0]["message"]
-        return msg.get("content") or ""
+        j = r.json()
+        u = j.get("usage") or {}
+        meta = {"tokens_in": u.get("prompt_tokens") or 0, "tokens_out": u.get("completion_tokens") or 0,
+                **headers_meta(r.headers)}
+        msg = j["choices"][0]["message"]
+        return msg.get("content") or "", meta
 
     def _gemini(self, p, system, user, timeout):
         url = f"{p['base_url']}/models/{p['model']}:generateContent"
@@ -344,10 +456,14 @@ class AIManager:
                                 "contents": [{"role": "user", "parts": [{"text": user}]}],
                                 "generationConfig": {"temperature": 0.1}})
         self._raise(r)
-        cands = r.json().get("candidates") or []
+        j = r.json()
+        u = j.get("usageMetadata") or {}
+        meta = {"tokens_in": u.get("promptTokenCount") or 0,
+                "tokens_out": (u.get("candidatesTokenCount") or 0) + (u.get("thoughtsTokenCount") or 0)}
+        cands = j.get("candidates") or []
         if not cands:
             raise AIError("Gemini tidak mengembalikan kandidat (mungkin diblokir safety filter)")
-        return "".join(part.get("text", "") for part in (cands[0].get("content") or {}).get("parts", []))
+        return "".join(part.get("text", "") for part in (cands[0].get("content") or {}).get("parts", [])), meta
 
     @staticmethod
     def _claude_bin(p):
@@ -392,8 +508,13 @@ class AIManager:
         except ValueError:
             raise AIError(f"output tidak terbaca: {(out or res.stderr)[:200]}")
         if res.returncode != 0 or data.get("is_error"):
-            raise AIError(str(data.get("result") or res.stderr or f"exit {res.returncode}")[:300])
-        return data.get("result") or ""
+            msg = str(data.get("result") or res.stderr or f"exit {res.returncode}")[:300]
+            limited = re.search(r"usage limit|rate limit|limit reached|too many", msg, re.I)
+            raise AIError(msg, status=429 if limited else None)
+        u = data.get("usage") or {}
+        meta = {"tokens_in": (u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0)
+                + (u.get("cache_creation_input_tokens") or 0), "tokens_out": u.get("output_tokens") or 0}
+        return data.get("result") or "", meta
 
     # -------------------------------------------------------------- models
     def list_models(self, name):
@@ -447,6 +568,13 @@ def _validate_fields(name, p):
             out["temperature"] = max(0.0, min(float(out["temperature"]), 2.0))
         except (TypeError, ValueError):
             raise ValueError(f"Temperature {name} harus angka 0-2") from None
+    for k, label, hi in (("daily_requests", "Batas request/hari", 10_000_000),
+                         ("daily_tokens", "Batas token/hari", 10_000_000_000), ("rpm", "Batas request/menit", 100_000)):
+        if k in out and out[k] not in (None, ""):
+            try:
+                out[k] = max(0, min(int(out[k]), hi))
+            except (TypeError, ValueError):
+                raise ValueError(f"{label} {name} harus angka (0 = tanpa batas, kosong = bawaan)") from None
     if "api_key" in out and out["api_key"] is not None:
         out["api_key"] = str(out["api_key"]).strip()
         if any(c.isspace() for c in out["api_key"]):

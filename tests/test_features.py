@@ -94,7 +94,9 @@ def test_failed_pipeline_explained_once_with_ai(tmp_path):
     assert "Test gagal" in text and "--- FAIL: TestQuota" in text and "glpat-abc" not in text
     assert ai.calls[0][2] == "pipeline" and "glpat-abc" not in ai.calls[0][1]
     assert "lint" not in ai.calls[0][1].split("Job gagal:")[1].split("\n")[0]  # allow_failure job skipped
-    assert w.gl.notes and "CI gagal" in w.gl.notes[0] and "Periksa perhitungan" in w.gl.notes[0]
+    note = w.gl.notes[0]
+    assert "gagal di job `test`" in note and "Periksa perhitungan" in note and "quota_test.go:42" in note
+    assert "**" not in note and "<sub>" not in note and "otomatis" not in note.lower(), "komentar natural"
     w.check_all()
     w.check_all()
     assert len(sent) == 1 and len(w.gl.notes) == 1, "satu pipeline dijelaskan sekali saja"
@@ -188,7 +190,9 @@ FINDINGS = {"findings": [
 def test_comment_body_has_apply_block():
     f = FINDINGS["findings"][0]
     body = comment_body(f, inline=True)
-    assert "```suggestion:-0+0\n\tq := \"SELECT * FROM t WHERE id = ?\"\n```" in body and "SQL injection" in body
+    assert "```suggestion:-0+0\n\tq := \"SELECT * FROM t WHERE id = ?\"\n```" in body
+    assert "id digabung" in body and "Pakai placeholder" in body
+    assert "🟠" not in body and "Major" not in body and "<sub>" not in body and "Saran review" not in body
     assert "suggestion:" not in comment_body(f, inline=False) and "`a.go:3`" in comment_body(f, inline=False)
     assert comment_body({**f, "fix_code": "a ``` b"}, True).count("````") == 2  # fence can't break
     assert "suggestion" not in comment_body({**f, "fix_code": f["evidence"]}, True), "tidak ada perubahan"

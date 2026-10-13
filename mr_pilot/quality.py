@@ -5,6 +5,7 @@ import time
 
 import requests
 
+from . import voice
 from .ai import AIManager
 from .util import short_error
 from .reviewer import extract_json
@@ -22,7 +23,8 @@ Jangan laporkan hal yang tidak diatur di standar. Jangan mengulang hal yang suda
 Gunakan nomor baris dari prefiks L<nomor>. Maksimal {max_items} pelanggaran, paling penting dulu.
 severity: error (melanggar aturan wajib/berisiko), warning (melanggar standar), info (saran).
 confidence: high hanya jika kamu yakin itu melanggar standar yang tertulis.
-Tulis message dalam bahasa {language}, singkat dan berisi saran perbaikan.
+Tulis message dalam bahasa {language}: 1-3 kalimat yang menyebut masalahnya, dampaknya, dan cara memperbaikinya.
+<<VOICE>>
 
 === STANDAR TIM ===
 {standards}
@@ -30,6 +32,7 @@ Tulis message dalam bahasa {language}, singkat dan berisi saran perbaikan.
 
 Jawab HANYA JSON: {{"violations": [{{"rule": "nama/bagian standar", "severity": "error|warning|info",
 "file": "path", "line": 123, "message": "...", "confidence": "high|medium|low"}}]}}"""
+AI_PROMPT = AI_PROMPT.replace("<<VOICE>>", voice.VOICE_RULES.replace("{", "{{").replace("}", "}}"))
 
 
 def _fp(*parts):
@@ -132,20 +135,16 @@ class CodeQuality:
 
     # -------------------------------------------------------------- helpers
     def _llm_ok(self):
-        return bool(self.ai.available("standards"))
+        if not self.ai.available("standards"):
+            return False
+        econ = getattr(self.ai, "economy", None)
+        return not (econ and econ("standards"))  # free-tier quota almost used up: rules only
 
-    def _footer(self):
-        f = self.report.get("comment_footer", "")
-        return f"\n\n<sub>{f}</sub>" if f else ""
+    def _footer_text(self):
+        return self.report.get("comment_footer", "") or ""
 
-    def _comment_body(self, v):
-        std = self.std.stack_name(v.get("stack")) if v.get("stack") else "Umum"
-        body = (f"{SEV_ICON.get(v['severity'], '⚠️')} **Code Standard · {v['severity'].upper()}** "
-                f"· `{v['rule']}`\n\n{v['message']}")
-        if v.get("snippet") and v["source"] != "ai":
-            body += f"\n\n```\n{v['snippet']}\n```"
-        body += f"\n\n_Standar: {std}_"
-        return body + self._footer()
+    def _comment_body(self, v, inline=True):
+        return voice.standard_comment(v, inline=inline, footer=self._footer_text())
 
     def _post_commit_comments(self, pid, commit, vs):
         csha, limit, n = commit["id"], int(self.report.get("max_comments_per_commit", 10)), 0
@@ -154,20 +153,17 @@ class CodeQuality:
         for v in to_post[:limit]:
             try:
                 if v.get("path") and v.get("line"):
-                    self.gl.commit_comment(pid, csha, self._comment_body(v), v["path"], v["line"])
+                    self.gl.commit_comment(pid, csha, self._comment_body(v, True), v["path"], v["line"])
                 else:
-                    self.gl.commit_comment(pid, csha, self._comment_body(v))
+                    self.gl.commit_comment(pid, csha, self._comment_body(v, False))
                 v["posted"] = True
                 n += 1
             except Exception:
                 log.exception("gagal posting komentar commit %s", csha[:8])
         rest = to_post[limit:]
         if rest:
-            lines = [f"- {SEV_ICON.get(v['severity'])} `{v['rule']}` {v.get('path') or ''}"
-                     f"{':' + str(v['line']) if v.get('line') else ''}: {v['message']}" for v in rest[:30]]
             try:
-                self.gl.commit_comment(pid, csha, f"**Code Standard:** {len(rest)} pelanggaran lain di commit ini\n\n"
-                                       + "\n".join(lines) + self._footer())
+                self.gl.commit_comment(pid, csha, voice.overflow_comment(rest, self._footer_text()))
                 n += 1
             except Exception:
                 log.exception("gagal posting ringkasan commit")
@@ -233,11 +229,12 @@ class CodeQuality:
                        "start_sha": refs.get("start_sha"), "head_sha": refs.get("head_sha"),
                        "new_path": v["path"], "old_path": v["path"], "new_line": v["line"]}
             try:
-                self.gl.mr_discussion(mr["project_id"], mr["iid"], self._comment_body(v), pos)
+                if not pos:
+                    raise ValueError("tanpa posisi")
+                self.gl.mr_discussion(mr["project_id"], mr["iid"], self._comment_body(v, True), pos)
             except Exception:
-                try:  # line not in diff -> post without position
-                    self.gl.mr_discussion(mr["project_id"], mr["iid"],
-                                          self._comment_body(v) + f"\n\n`{v.get('path')}:{v.get('line')}`")
+                try:  # line not in diff -> post without position, naming the location in the text
+                    self.gl.mr_discussion(mr["project_id"], mr["iid"], self._comment_body(v, False))
                 except Exception:
                     log.exception("gagal posting temuan AI")
                     continue
@@ -246,26 +243,11 @@ class CodeQuality:
             n += 1
         return n
 
-    def _summary_body(self, mr, vs, counts):
-        if not vs:
-            return ("✅ **Code Standard:** tidak ada pelanggaran standar pada commit terbaru "
-                    f"(`{mr['sha'][:8]}`)." + self._footer())
-        lines = [f"**Code Standard** · commit `{mr['sha'][:8]}` · "
-                 f"❌ {counts['error']} error · ⚠️ {counts['warning']} warning · ℹ️ {counts['info']} info", "",
-                 "| | Aturan | Lokasi | Keterangan |", "|---|---|---|---|"]
-        for v in vs[:40]:
-            loc = f"`{v.get('path')}:{v.get('line')}`" if v.get("path") else "-"
-            msg = (v.get("message") or "").replace("|", "\\|").replace("\n", " ")
-            lines.append(f"| {SEV_ICON.get(v['severity'])} | `{v['rule']}` | {loc} | {msg} |")
-        if len(vs) > 40:
-            lines.append(f"\n…dan {len(vs) - 40} lainnya.")
-        return "\n".join(lines) + self._footer()
-
     def _upsert_summary_note(self, pid, iid, mr, vs, counts):
         k = f"cq_note:{pid}:{iid}"
-        body = self._summary_body(mr, vs, counts)
         note_id = self.store.kv_get(k)
-        if not vs and not note_id:
+        body = voice.summary_note(mr["sha"], vs, had_before=bool(note_id), footer=self._footer_text())
+        if body is None:
             return  # nothing to say, don't spam a "clean" note
         try:
             if note_id:

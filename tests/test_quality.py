@@ -109,8 +109,8 @@ def test_team_checklist_fully_ticked_is_clean():
 def test_title_warning_suggests_title_from_branch():
     std = Standards(std_cfg()["code_quality"])
     v = std.check_title("Idas 5327/fix role signature", "IDAS-5327/fix-role-signature")[0]
-    assert "Saran: `fix(IDAS-5327): role signature`" in v["message"] and "^(" not in v["message"]
-    assert "Saran" not in std.check_title("Update", "main")[0]["message"]
+    assert "Bisa diganti jadi `fix(IDAS-5327): role signature`" in v["message"] and "^(" not in v["message"]
+    assert "Bisa diganti" not in std.check_title("Update", "main")[0]["message"]
 
 
 def test_validate_rules_yaml():
@@ -177,7 +177,10 @@ def test_code_quality_run_posts_on_commit_and_dedups():
     lines = sorted((c[1], c[2]) for c in gl.commit_comments)
     assert lines == [("internal/a/b.go", 11), ("internal/a/b.go", 12), ("internal/a/b.go", 13)]
     assert all(c[0] == "c1" * 20 for c in gl.commit_comments)  # merge commit skipped
-    assert "go-sql-concat" in gl.notes[0] and gl.statuses[0][1] == "success" and "1 error" in gl.statuses[0][3]
+    note = gl.notes[0]
+    assert "Perlu diperbaiki sebelum merge" in note and "`internal/a/b.go:13`" in note and "SQL injection" in note
+    assert "go-sql-concat" not in note and "|" not in note and "❌" not in note, "tanpa id aturan/tabel/emoji"
+    assert gl.statuses[0][1] == "success" and "1 error" in gl.statuses[0][3]
     # second run: commit not re-commented, summary note edited instead of new
     cq.run(mr("h2"))
     assert len(gl.commit_comments) == 3 and len(gl.notes) == 1 and gl.edits[0][0] == "99"

@@ -7,6 +7,7 @@ import re
 from .formatting import e
 from .reviewer import extract_json
 from .util import redact, short_error
+from .voice import VOICE_RULES, pipeline_comment
 
 log = logging.getLogger("mr_pilot.pipeline")
 
@@ -29,7 +30,10 @@ Jawab HANYA JSON:
  "where": "file:baris / nama test / step yang gagal, kosong jika tidak jelas",
  "fix": "langkah perbaikan konkret untuk developer (1-3 kalimat)",
  "code_problem": true,
- "confidence": "high|medium|low"}"""
+ "confidence": "high|medium|low"}
+"cause" dan "fix" juga dipasang sebagai komentar di MR untuk developernya.
+"""
+SYSTEM += VOICE_RULES
 
 CATEGORY = {"test": "Test gagal", "build": "Build/compile gagal", "lint": "Lint/format", "dependency": "Dependency",
             "deploy": "Deploy", "infra": "Infrastruktur/runner", "flaky": "Kemungkinan flaky", "config": "Konfigurasi CI"}
@@ -138,11 +142,7 @@ class PipelineWatcher:
             msg += ["", "<b>Baris error di log:</b>", f"<pre>{e(snippet)}</pre>"]
         self.send("\n".join(msg))
         if self.cfg.get("comment_on_mr", True) and info.get("cause"):
-            body = (f"**CI gagal** di job `{main.get('name')}` (stage `{main.get('stage')}`)\n\n"
-                    f"**Penyebab:** {info['cause']}\n\n"
-                    + (f"**Lokasi:** `{info['where']}`\n\n" if info.get("where") else "")
-                    + (f"**Saran:** {info['fix']}\n\n" if info.get("fix") else "")
-                    + f"<sub>Analisis log pipeline otomatis · [log job]({main.get('web_url')})</sub>")
+            body = pipeline_comment(main, info)
             try:
                 self.gl.add_note(pid, iid, body)
             except Exception as ex:
@@ -152,7 +152,7 @@ class PipelineWatcher:
         return info or {"lines": lines}
 
     def _ai_explain(self, rec, jobs, logs):
-        if not self.ai or not self.ai.available("pipeline"):
+        if not self.ai or not self.ai.available("pipeline") or getattr(self.ai, "economy", lambda t: False)("pipeline"):
             return None
         user = (f"MR: {rec.get('title')}\nBranch: {rec.get('source_branch')} -> {rec.get('target_branch')}\n"
                 f"Job gagal: {', '.join(str(j.get('name')) for j in jobs)}\n\nLog (bagian akhir):\n{logs}")

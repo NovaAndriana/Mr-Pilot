@@ -96,9 +96,11 @@ def seed(store, now=None):
         prov = rnd.choice(["claude_code"] * 5 + ["gemini"] * 3 + ["groq"] * 2)
         ok = rnd.random() > (0.04 if prov != "groq" else 0.15)
         ms = int(rnd.gauss({"claude_code": 21000, "gemini": 9000, "groq": 2500}[prov], 2000))
-        store.db.execute("INSERT INTO ai_calls(ts,provider,task,ok,ms,error) VALUES(?,?,?,?,?,?)",
+        tin, tout = (int(rnd.uniform(6000, 22000)), int(rnd.uniform(600, 2500))) if ok else (0, 0)
+        store.db.execute("INSERT INTO ai_calls(ts,provider,task,ok,ms,error,tokens_in,tokens_out) "
+                         "VALUES(?,?,?,?,?,?,?,?)",
                          (now - rnd.uniform(0, 7 * 86400), prov, rnd.choice(["review", "standards"]), int(ok), max(300, ms),
-                          "" if ok else rnd.choice(["HTTP 429: rate limit", "timeout"])))
+                          "" if ok else rnd.choice(["HTTP 429: rate limit", "timeout"]), tin, tout))
     store.db.commit()
 
     evs = [("system", "MR Pilot aktif", "Memantau MR untuk @nova.andriana", "info", 300),

@@ -131,9 +131,23 @@ Atur di **dashboard → AI**, atau lewat `.env` (wizard mengisinya).
 - **Tes** mengecek koneksi dengan satu panggilan kecil. **Ambil daftar model** membaca model yang tersedia langsung dari provider.
 - Bisa **menambah provider** sendiri, misalnya akun OpenRouter kedua atau server Ollama lain.
 - API key yang diisi lewat dashboard disimpan di `data/ai_overrides.json` (izin file 600) dan tidak pernah dikirim balik ke browser (hanya 4 karakter terakhir).
-- Statistik 7 hari (jumlah panggilan, persentase sukses, rata-rata waktu) dan error terakhir tampil di tab yang sama.
+- Statistik 7 hari (jumlah request, persentase sukses, token, rata-rata waktu) dan error terakhir tampil di tab yang sama.
 
 > Kode (diff) dikirim ke provider yang dipakai. Pastikan sesuai kebijakan perusahaan. Kalau tidak boleh keluar jaringan, pakai provider **Lokal**.
+
+### Pemakaian & batas AI gratis
+Setiap panggilan AI dicatat (jumlah request dan token), lalu dihitung per 24 jam terakhir per provider.
+
+- **Dashboard → AI**: di bawah tiap provider tampil `request · token (24 jam)` dan bar sisa kuota. Isi batasnya di **Atur → Batas pemakaian** (request/hari, token/hari, request/menit). Kosong = batas bawaan paket gratis, `0` = tanpa batas.
+- **Telegram `/kuota`**: ringkasan pemakaian semua provider, plus sisa kuota yang dilaporkan provider sendiri (header rate-limit).
+- **Batas bawaan paket gratis**: Groq 1.000 request + 200rb token/hari, 30 request/menit; model OpenRouter `:free` 50 request/hari, 20 request/menit. Gemini, Claude Code, dan lainnya: isi sendiri sesuai paket Anda.
+- **Mode hemat (≥ 80%)**: pengecekan tambahan dilewati dulu (second opinion, analisis pipeline, cek standar oleh AI). Review utama tetap jalan. Anda dapat notifikasi Telegram sekali.
+- **Habis (100%) atau provider membalas 429/kuota habis**: provider itu dilewati sampai pulih (mengikuti `retry-after` dari provider) dan provider berikutnya yang dipakai. Notifikasi dikirim sekali per hari. Kalau semua habis, review tetap jalan dengan cek otomatis (aturan regex) saja.
+
+Tips agar tidak kena limit: pasang 2-3 provider gratis berurutan (mis. Gemini → Groq → OpenRouter `:free`), dan arahkan *Cek standar kode* ke Groq yang kuotanya besar.
+
+### Gaya komentar di GitLab
+Komentar yang diposting dari akun Anda ditulis seperti reviewer manusia: tanpa label bot, id aturan, tabel, emoji, atau footer "otomatis". Isinya tetap lengkap: apa masalahnya, kenapa berbahaya (dengan contoh skenario), di mana (`file:baris`), dan cara memperbaikinya. Hal kecil diawali `nit:`. Ringkasan di MR dikelompokkan menjadi *Perlu diperbaiki sebelum merge*, *Sebaiknya dirapikan*, dan *Catatan kecil*, dan berubah jadi "sudah beres semua" setelah developer memperbaikinya. Kalau tetap mau ada footer, isi `code_quality.report.comment_footer`.
 
 ---
 
@@ -164,7 +178,9 @@ Contoh menambah aturan di `rules.yaml`:
     stacks: [go]
     severity: warning          # error | warning | info
     pattern: '\btime\.Sleep\('
-    message: Hindari time.Sleep di kode aplikasi, gunakan ticker/context.
+    message: time.Sleep di sini bisa menahan request lebih lama dari yang perlu.
+    why: Kalau dipanggil di handler, setiap request ikut tertahan dan tidak bisa dibatalkan saat client sudah pergi.
+    fix: Pakai ticker atau `select` dengan `ctx.Done()` supaya bisa dihentikan.
     exclude_paths: ["*_test.go"]
 ```
 Uji aturan sebelum dipakai lewat dashboard (**Uji aturan otomatis**) atau dari command line:

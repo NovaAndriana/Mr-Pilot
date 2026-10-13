@@ -1,11 +1,13 @@
 # Aturan otomatis (regex) yang dicek pada BARIS YANG DITAMBAHKAN di setiap commit.
-# Pelanggaran -> warning di commit tersebut (file + baris) + dashboard + Telegram.
+# Pelanggaran -> komentar di commit tersebut (file + baris) + dashboard + Telegram.
 #
-#   id        : unik, muncul di komentar & dashboard
+#   id        : unik, dipakai di dashboard (tidak tampil di komentar GitLab)
 #   stacks    : daftar stack (lihat code_quality.stacks di config) atau ["*"] untuk semua
 #   severity  : error | warning | info
 #   pattern   : regex Python, dicocokkan per baris
-#   message   : pesan untuk developer
+#   message   : kalimat pembuka komentar, ditulis seperti reviewer ke rekan setim
+#   why       : (opsional) kenapa ini masalah, sebaiknya dengan contoh dampaknya
+#   fix       : (opsional) cara memperbaikinya, boleh dengan contoh kode
 #   paths / exclude_paths : glob opsional
 #   enabled   : false untuk mematikan sementara
 
@@ -15,60 +17,78 @@ rules:
     stacks: ["*"]
     severity: error
     pattern: '(?i)\b(password|passwd|secret|api[_-]?key|access[_-]?token|client[_-]?secret)\b["'']?\s*(:=|=|:)\s*["''][^"''\s]{8,}["'']'
-    message: Secret/password di-hardcode. Pindahkan ke env var / secret manager.
+    message: Sepertinya ada password/secret yang ditulis langsung di kode.
+    why: Nilainya ikut tersimpan di riwayat git dan bisa dibaca siapa pun yang punya akses repo, termasuk setelah baris ini dihapus nanti.
+    fix: Pindahkan ke environment variable atau secret manager, lalu baca lewat config. Kalau secret ini sudah pernah di-push, sebaiknya sekalian di-rotate.
     exclude_paths: ["*_test.go", "*.test.ts", "*.test.tsx", "*.spec.ts", "*.spec.tsx", "*.md"]
 
   - id: private-key-committed
     stacks: ["*"]
     severity: error
     pattern: '-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----'
-    message: Private key ikut ter-commit. Hapus dan rotate key-nya.
+    message: Ada private key yang ikut ter-commit di sini.
+    why: Siapa pun yang bisa clone repo ini bisa memakai key tersebut, dan menghapus file di commit berikutnya tidak menghapusnya dari riwayat git.
+    fix: Keluarkan file key-nya dari repo (tambahkan ke .gitignore), simpan di secret manager / mount saat deploy, dan ganti (rotate) key-nya karena yang ini sudah terekspos.
 
   - id: todo-without-ticket
     stacks: ["*"]
     severity: info
     pattern: '(//|#|/\*)\s*(TODO|FIXME)(?!\s*\(\s*[A-Z][A-Z0-9]+-\d+\s*\))'
-    message: TODO/FIXME wajib menyebut tiket, mis. TODO(IDAS-123).
+    message: TODO ini belum ada nomor tiketnya.
+    why: Tanpa tiket, TODO biasanya terlupa dan tidak ada yang tahu kapan harus dikerjakan.
+    fix: "Tambahkan nomor tiketnya, misalnya `TODO(IDAS-123): ...`, atau selesaikan sekarang kalau kecil."
 
   - id: merge-conflict-marker
     stacks: ["*"]
     severity: error
     pattern: '^(<{7}|>{7}|={7})( |$)'
-    message: Sisa marker merge conflict.
+    message: Masih ada sisa marker merge conflict di baris ini.
+    why: File-nya tidak akan bisa di-build atau jalan dengan benar selama marker ini masih ada.
+    fix: Selesaikan conflict-nya, pilih kode yang benar, lalu hapus baris `<<<<<<<`, `=======`, dan `>>>>>>>`.
 
   # ---------------- Go
   - id: go-no-fmt-print
     stacks: [go]
     severity: warning
     pattern: '\b(fmt\.Print(ln|f)?|log\.Print(ln|f)?)\('
-    message: Gunakan logger terstruktur proyek, bukan fmt.Print / log.Print.
+    message: Untuk logging sebaiknya pakai logger proyek, bukan fmt.Print / log.Print.
+    why: Output fmt.Print tidak punya level, tidak terstruktur, dan tidak ikut terkumpul dengan rapi di log server, jadi susah dilacak saat ada masalah di production.
+    fix: "Ganti dengan logger yang dipakai proyek, misalnya `logger.Info(\"pesan\", \"id\", id)`. Kalau ini sisa debugging, cukup dihapus."
     exclude_paths: ["*_test.go", "cmd/**", "scripts/**"]
 
   - id: go-ignored-error
     stacks: [go]
     severity: warning
     pattern: '^\s*(_\s*=|[A-Za-z_][\w]*\s*,\s*_\s*:?=)\s*[\w.]+\('
-    message: Error diabaikan (_). Tangani atau beri komentar alasannya.
+    message: Error dari pemanggilan ini diabaikan dengan `_`.
+    why: Kalau pemanggilannya gagal (misalnya data tidak ditemukan atau koneksi DB putus), kode di bawahnya tetap jalan dengan nilai kosong dan bug-nya baru ketahuan jauh dari sumbernya.
+    fix: "Tangani error-nya, misalnya `if err != nil { return nil, fmt.Errorf(\"cari data: %w\", err) }`. Kalau memang aman diabaikan, beri komentar singkat alasannya."
     exclude_paths: ["*_test.go"]
 
   - id: go-panic
     stacks: [go]
     severity: warning
     pattern: '\bpanic\('
-    message: Hindari panic di kode aplikasi, kembalikan error.
+    message: Sebaiknya jangan panic di kode aplikasi.
+    why: Panic di dalam handler bisa menjatuhkan request (atau seluruh service kalau tidak di-recover), padahal kondisi seperti ini biasanya bisa ditangani dengan rapi.
+    fix: Kembalikan error ke pemanggil dan biarkan layer di atasnya yang menentukan respons yang tepat.
     exclude_paths: ["*_test.go", "cmd/**", "main.go"]
 
   - id: go-sql-concat
     stacks: [go]
     severity: error
     pattern: '(?i)(\.(Raw|Exec|Query|QueryRow)\(\s*fmt\.Sprintf|"\s*(SELECT|UPDATE|DELETE|INSERT)\b[^"]*"\s*\+)'
-    message: SQL disusun dengan string concat/Sprintf (risiko injection). Gunakan parameter.
+    message: Query SQL di sini disusun dengan menggabungkan string, jadi rawan SQL injection.
+    why: "Kalau nilai yang digabung berasal dari input user, isi seperti `1 OR 1=1` atau `1; DROP TABLE ...` ikut dieksekusi sebagai bagian dari query."
+    fix: "Pakai parameter query, misalnya `db.Where(\"id = ?\", id)` atau `db.QueryRow(\"SELECT ... WHERE id = $1\", id)`."
 
   - id: go-getenv-scattered
     stacks: [go]
     severity: info
     pattern: '\bos\.Getenv\('
-    message: Baca konfigurasi sekali di package config, jangan os.Getenv tersebar.
+    message: os.Getenv dipanggil langsung di sini.
+    why: Kalau pembacaan env tersebar di banyak tempat, susah tahu konfigurasi apa saja yang dibutuhkan service dan nilai yang hilang baru ketahuan saat runtime.
+    fix: Baca sekali di package config saat start, lalu teruskan nilainya lewat struct config.
     exclude_paths: ["*config*/**", "*config*.go", "cmd/**", "*_test.go"]
 
   # ---------------- React / React Native (TypeScript)
@@ -76,42 +96,56 @@ rules:
     stacks: [react, react-native]
     severity: warning
     pattern: '\bconsole\.(log|debug|info)\('
-    message: Hapus console.log sebelum merge (pakai logger jika perlu).
+    message: Masih ada console.log di sini.
+    why: Log ini ikut ke build production, membuat console user penuh dan kadang menampilkan data yang tidak perlu terlihat.
+    fix: Hapus kalau ini sisa debugging, atau pakai logger proyek yang bisa dimatikan di production.
     exclude_paths: ["*.test.*", "*.spec.*"]
 
   - id: ts-no-any
     stacks: [react, react-native]
     severity: warning
     pattern: '(:\s*any\b|<any>|as\s+any\b|any\[\])'
-    message: Hindari tipe any, gunakan tipe spesifik atau unknown.
+    message: Tipe `any` di sini menghilangkan pengecekan TypeScript.
+    why: Kesalahan seperti salah nama field atau tipe dari API tidak akan ketahuan saat compile dan baru muncul sebagai error di aplikasi.
+    fix: Pakai tipe yang spesifik (buat interface untuk response-nya) atau `unknown` lalu persempit tipenya sebelum dipakai.
 
   - id: ts-ignore
     stacks: [react, react-native]
     severity: warning
     pattern: '@ts-ignore'
-    message: Jangan pakai @ts-ignore; gunakan @ts-expect-error + alasan.
+    message: "`@ts-ignore` menyembunyikan error TypeScript di baris berikutnya."
+    why: Kalau masalahnya nanti sudah beres, ts-ignore tetap diam, dan kalau muncul error lain di baris yang sama juga ikut tersembunyi.
+    fix: Perbaiki tipenya kalau bisa. Kalau memang perlu, pakai `@ts-expect-error` dengan alasan singkat di komentar.
 
   - id: react-index-key
     stacks: [react, react-native]
     severity: info
     pattern: 'key=\{\s*(index|idx|i)\s*\}'
-    message: Key list memakai index; gunakan id yang stabil.
+    message: Key list memakai index.
+    why: Saat item ditambah, dihapus, atau diurutkan ulang, React bisa salah mencocokkan komponen sehingga state atau input pindah ke item yang salah.
+    fix: Pakai id yang stabil dari datanya, misalnya `key={item.id}`.
 
   - id: react-dangerous-html
     stacks: [react]
     severity: warning
     pattern: 'dangerouslySetInnerHTML'
-    message: dangerouslySetInnerHTML wajib disanitasi (DOMPurify).
+    message: Ada dangerouslySetInnerHTML di sini.
+    why: Kalau isinya berasal dari input user atau API, script di dalamnya bisa ikut dijalankan di browser (XSS).
+    fix: "Sanitasi dulu isinya, misalnya `dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html) }}`, atau render sebagai teks biasa kalau tidak butuh HTML."
 
   - id: hardcoded-url
     stacks: [react, react-native]
     severity: warning
     pattern: '["''`]https?://(?!localhost|127\.0\.0\.1|www\.w3\.org|schemas\.)[^"''`\s]+["''`]'
-    message: URL di-hardcode; ambil dari env/config.
+    message: URL ini ditulis langsung di kode.
+    why: Saat pindah environment (dev, staging, production), URL-nya harus diubah manual di banyak tempat dan mudah terlewat.
+    fix: Ambil dari env/config, misalnya `process.env.REACT_APP_API_URL` atau file config environment yang sudah ada.
     exclude_paths: ["*.test.*", "*.spec.*", "*.stories.*"]
 
   - id: rn-asyncstorage-token
     stacks: [react-native]
     severity: error
     pattern: '(?i)AsyncStorage\.setItem\(\s*["''`][^"''`]*(token|password|secret)'
-    message: Token/password disimpan di AsyncStorage; gunakan Keychain/Keystore.
+    message: Token/password disimpan di AsyncStorage.
+    why: AsyncStorage tidak terenkripsi, jadi isinya bisa dibaca di perangkat yang di-root/jailbreak atau dari backup.
+    fix: Simpan di Keychain/Keystore, misalnya lewat `react-native-keychain` atau `expo-secure-store`.

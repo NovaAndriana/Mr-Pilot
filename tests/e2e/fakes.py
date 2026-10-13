@@ -539,7 +539,8 @@ class _AIHandler(_Base):
         if isinstance(r, int):
             return self._json(r, {"error": {"message": f"injected {r}"}})
         content = r if isinstance(r, str) else json.dumps(r)
-        self._json(200, {"choices": [{"message": {"role": "assistant", "content": content}}]})
+        self._json(200, {"choices": [{"message": {"role": "assistant", "content": content}}],
+                         "usage": {"prompt_tokens": 1000, "completion_tokens": 200}})
 
 
 # ==================================================================== Teams

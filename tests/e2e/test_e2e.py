@@ -166,6 +166,17 @@ def w():
         print("data:", W.data)
 
 
+_TELLS = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]|<sub>|Code Standard|Saran review|otomatis|\bAI\b"
+                    r"|go-sql-concat|go-ignored-error|\| *Aturan *\||\*\*(Penyebab|Lokasi|Saran):")
+
+
+def assert_natural(body):
+    """GitLab comments must read like a teammate wrote them: no bot badges, rule ids, tables, emoji, footers."""
+    m = _TELLS.search(body or "")
+    assert not m, f"komentar terlihat seperti bot ({m.group(0)!r}): {body[:300]}"
+    assert len((body or "").strip()) > 5, body
+
+
 def done_count(W):
     return sum(1 for t in W.tg.texts() if t.startswith("Selesai cek GitLab"))
 
@@ -234,7 +245,11 @@ def test_02_new_mr_card_review_quality(w):
     # code standard warnings on the commit (file + line), summary note, commit status
     lines = sorted((c[1].get("path"), c[1].get("line")) for c in w.gl.commit_comments if c[1].get("line"))
     assert ("internal/x/usecase.go", 2) in lines and ("internal/x/usecase.go", 3) in lines
-    assert any("Code Standard" in n["body"] for n in w.gl.notes_by_me(375))
+    notes = [n["body"] for n in w.gl.notes_by_me(375)]
+    summary = next(b for b in notes if "Catatan review standar kode" in b)
+    assert "Perlu diperbaiki sebelum merge" in summary and "`internal/x/usecase.go:" in summary
+    for body in [summary] + [c[1]["note"] for c in w.gl.commit_comments] + [b["body"] for _, b in w.gl.discussions]:
+        assert_natural(body)
     assert w.gl.statuses and w.gl.statuses[-1][1]["name"] == "code-standard"
     assert w.gl.discussions, "temuan AI inline"
 
@@ -673,7 +688,8 @@ def test_26_dashboard_writes_and_bot_commands(w):
     n = len(w.tg.sent)
     cek(w)
     mid = card(w, 530, n)
-    wait(lambda: "e2e-no-println" in json.dumps(w.gl.commit_comments), 20, "warning aturan baru di commit")
+    wait(lambda: "Pakai logger, bukan fmt.Println." in json.dumps(w.gl.commit_comments), 20, "warning aturan baru di commit")
+    assert "e2e-no-println" not in json.dumps(w.gl.commit_comments), "id aturan tidak tampil di GitLab"
     # valid AI change is saved
     code, body, _ = http(w, "/api/ai", "PUT", {"providers": {"ai-b": {"timeout": 90}}}, hdr)
     assert code == 200, body
@@ -983,7 +999,8 @@ def test_33_failed_pipeline_is_explained_and_green_is_announced(w):
     assert "quota_test.go:42" in t and "Periksa pengurangan kuota" in t and "expected 5, got 4" in t
     assert "glpat-SECRET" not in t and "glpat-SECRET" not in seen["user"], "token di log CI harus disensor"
     assert "\x1b" not in seen["user"] and "--- FAIL: TestQuotaPerUser" in seen["user"]
-    note = wait(lambda: [x for x in w.gl.notes_by_me(580) if "CI gagal" in x["body"]], 10, "komentar CI di MR")
+    note = wait(lambda: [x for x in w.gl.notes_by_me(580) if "gagal di job" in x["body"]], 10, "komentar CI di MR")
+    assert_natural(note[0]["body"])
     assert len(w.gl.notes_by_me(580)) == notes + 1
     assert "Periksa pengurangan kuota" in note[0]["body"]
     # same pipeline: no repeat
@@ -1023,16 +1040,21 @@ def test_34_send_suggestions_to_mr(w):
     w.tg.press(mid, w.tg.buttons(mid)["💬 Kirim saran ke MR"])
     done = wait(lambda: w.tg.find("saran dikirim", n), 20, "konfirmasi saran")
     assert "2 saran dikirim" in w.tg.messages[done]["text"] and "1 bisa langsung di-Apply" in w.tg.messages[done]["text"]
-    posted = [b for k, b in w.gl.discussions[before:] if k == (7, 590) and "Saran review" in b["body"]]
+    mine = ("Pakai parameter query", "Tangani error dari repo.Find", "Halusinasi")
+    posted = [b for k, b in w.gl.discussions[before:] if k == (7, 590) and any(x in b["body"] for x in mine)]
     assert len(posted) == 2
-    sql = next(b for b in posted if "SQL injection" in b["body"])
+    sql = next(b for b in posted if "Pakai parameter query" in b["body"])
+    for b in posted:
+        assert_natural(b["body"])
+    assert "id dari request digabung" in sql["body"]
+    assert next(b for b in posted if "repo.Find" in b["body"])["body"].startswith("nit: ")
     assert sql["position"]["new_line"] == 4 and sql["position"]["new_path"] == "internal/q/usecase.go"
     assert '```suggestion:-0+0\n\tq := "SELECT * FROM t WHERE id = ?"\n```' in sql["body"]
     assert not any("Halusinasi" in b["body"] for b in posted), "temuan tanpa bukti tidak dikirim"
     n = len(w.tg.sent)
     w.tg.press(mid, w.tg.buttons(mid)["💬 Kirim saran ke MR"])
     wait(lambda: w.tg.find("sudah pernah dikirim", n), 15, "tidak dobel")
-    assert len([1 for k, b in w.gl.discussions if k == (7, 590) and "Saran review" in b["body"]]) == 2
+    assert len([1 for k, b in w.gl.discussions if k == (7, 590) and any(x in b["body"] for x in mine)]) == 2
 
 
 def test_35_digest_and_reminders(w):
@@ -1070,3 +1092,44 @@ def test_35_digest_and_reminders(w):
     digests = sum(1 for t in w.tg.texts(n) if "Ringkasan" in t)
     time.sleep(3)
     assert sum(1 for t in w.tg.texts(n) if "Ringkasan" in t) == digests == 1, "ringkasan sekali sehari"
+
+
+def test_36_ai_usage_limits(w):
+    code, loc, cookie = login(w, PASSWORD)  # app restarted in test 35: lockout gone, old session revoked
+    assert code in (302, 303) and cookie, (code, loc)
+    hdr = {"Cookie": cookie.split(";")[0], "X-MRPilot": "1"}
+    # /kuota: usage per provider in the last 24h, tokens from the provider's usage block
+    n = len(w.tg.sent)
+    w.tg.say("/kuota")
+    k = wait(lambda: w.tg.find("Pemakaian AI", n), 15, "/kuota")
+    t = w.tg.messages[k]["text"]
+    assert "ai-b" in t and "openai" in t and "token" in t and "batas belum diisi" in t
+    ai = json.loads(http(w, "/api/ai", headers=hdr)[1])
+    b = {p["name"]: p for p in ai["providers"]}["ai-b"]
+    used = b["quota"]["usage"]["requests"]
+    assert used >= 3 and b["quota"]["usage"]["tokens"] >= used * 1000 and b["quota"]["level"] == "ok"
+    assert {r["provider"]: r for r in ai["stats"]["by_provider"]}["ai-b"]["tokens_in"] > 0
+    # invalid limit rejected; a limit equal to today's usage makes ai-b exhausted -> skipped + Telegram alert
+    assert http(w, "/api/ai", "PUT", {"providers": {"ai-b": {"daily_requests": "banyak"}}}, hdr)[0] == 400
+    code, body, _ = http(w, "/api/ai", "PUT", {"providers": {"ai-b": {"daily_requests": used}}}, hdr)
+    assert code == 200, body
+    b = {p["name"]: p for p in json.loads(http(w, "/api/ai", headers=hdr)[1])["providers"]}["ai-b"]
+    assert b["quota"]["level"] == "exhausted" and b["quota"]["limits"]["daily_requests"] == used
+    calls_b = len(w.ai_b.calls)
+    try:
+        w.gl.add_mr(600, "feat: batas ai", "e6" * 20, files={"a.go": GO_OK})
+        n = len(w.tg.sent)
+        cek(w)
+        card(w, 600, n)
+        alert = wait(lambda: w.tg.find("batas harian", n), 15, "notif batas harian")
+        assert "ai-b" in w.tg.messages[alert]["text"]
+        assert len(w.ai_b.calls) == calls_b, "provider yang habis kuota tidak dipanggil"
+        n = len(w.tg.sent)
+        w.tg.say("/kuota")
+        k = wait(lambda: w.tg.find("Pemakaian AI", n), 15, "/kuota")
+        assert f"{used}/{used} request" in w.tg.messages[k]["text"] and "🔴" in w.tg.messages[k]["text"]
+    finally:
+        code, body, _ = http(w, "/api/ai", "PUT", {"providers": {"ai-b": {"daily_requests": 0}}}, hdr)
+        assert code == 200, body
+    b = {p["name"]: p for p in json.loads(http(w, "/api/ai", headers=hdr)[1])["providers"]}["ai-b"]
+    assert b["quota"]["level"] == "ok" and b["quota"]["limits"]["daily_requests"] is None

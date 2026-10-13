@@ -63,6 +63,7 @@ class App:
         self.quality = CodeQuality(cfg, self.gl, self.store, cfg.get("_base_dir", "."), self.ai)
         from .pipelines import PipelineWatcher
         self.pipes = PipelineWatcher(cfg, self.gl, self.store, self.ai, self.safe_send, self.event)
+        self.ai.notify = self.safe_send  # quota alerts (80% / exhausted) go to Telegram
         from .digest import Digest
         self.digest = Digest(cfg, self.store, self.safe_send)
         self._last_tick = 0.0
@@ -482,7 +483,7 @@ class App:
         cmd = text.split()[0].split("@")[0].lower() if text else ""
         if cmd in ("/start", "/help"):
             self.safe_send("<b>MR Pilot</b>\n/status: MR yang menunggu keputusan\n"
-                           "/cek: cek GitLab sekarang\n/digest: ringkasan sekarang\n\n"
+                           "/cek: cek GitLab sekarang\n/digest: ringkasan sekarang\n/kuota: pemakaian AI\n\n"
                            "Kartu MR punya tombol Merge, Tolak, Review ulang, Kirim saran ke MR, dan Buka MR.")
         elif cmd == "/status":
             pend = self.store.by_status("notified", "waiting_bot", "error", "notify_failed")
@@ -495,6 +496,8 @@ class App:
                     lines.append(f"• <a href=\"{e(r['web_url'], True)}\">!{r['iid']}</a> {e(r['title'])} "
                                  f"[{e(r['status'])}{' · ' + VERDICT_LABEL.get(v, v) if v else ''}]")
                 self.safe_send("\n".join(lines))
+        elif cmd == "/kuota":
+            self.safe_send(self.ai.quota_report())
         elif cmd == "/digest":
             self.digest.send_digest()
         elif cmd == "/cek":

@@ -187,7 +187,7 @@ tr:last-child td { border-bottom:0; }
 textarea { width:100%; min-height:440px; resize:vertical; border:1px solid var(--line); border-radius:8px; padding:12px; background:var(--surface-2);
   color:var(--ink); font:13px/1.55 var(--mono); tab-size:2; }
 textarea.small { min-height:130px; }
-input[type=text] { width:100%; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--surface-2); color:var(--ink); font:13px var(--mono); }
+input[type=text], input[type=number] { width:100%; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--surface-2); color:var(--ink); font:13px var(--mono); }
 .btn { border:0; border-radius:8px; padding:8px 14px; background:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
 .btn.ghost { background:none; color:var(--ink); border:1px solid var(--line); }
 .btn:disabled { opacity:.5; cursor:default; }
@@ -228,6 +228,15 @@ input[type=password] { width:100%; border:1px solid var(--line); border-radius:8
 .status-pill { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:500; padding:1px 8px; border-radius:999px; max-width:100%; overflow-wrap:anywhere; }
 .status-pill.ok { background:var(--add-soft); color:var(--add); }
 .status-pill.no { background:var(--surface-2); color:var(--ink-2); }
+.status-pill.warn { background:var(--warn-soft); color:var(--warn); }
+.status-pill.bad { background:var(--del-soft); color:var(--del); }
+.quota { display:flex; align-items:center; gap:10px; font-size:12px; color:var(--ink-2); margin-top:6px; flex-wrap:wrap; }
+.quota .meter { width:120px; height:6px; border-radius:3px; background:var(--line); overflow:hidden; flex:none; }
+.quota .meter i { display:block; height:100%; background:var(--accent); }
+.quota .meter i.low { background:var(--warn); }
+.quota .meter i.exhausted { background:var(--del); }
+.limits { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:10px; }
+@media (max-width: 640px) { .limits { grid-template-columns:1fr; } }
 @media (max-width: 640px) { .pv-h { grid-template-columns:auto minmax(0,1fr); } .pv-act { grid-column:2; } .pv-body { padding-left:18px; } }
 
 /* ---------- drawer */
@@ -834,6 +843,7 @@ async function loadAI(data) {
           <div class="pv-sub"><span class="mono">${esc(p.model || "-")}</span>
             ${p.ready ? '<span class="status-pill ok">✓ Siap dipakai</span>' : `<span class="status-pill no">${esc(p.reason)}</span>`}
             ${p.key_set ? `<span>key ${esc(p.key_hint)}</span>` : ""}</div>
+          ${quotaLine(p)}
         </div>
         <div class="pv-act">
           <label class="switch" title="${p.enabled ? "Nonaktifkan" : "Aktifkan"}"><input type="checkbox" data-en ${p.enabled ? "checked" : ""} aria-label="Aktifkan ${esc(p.name)}"><span></span></label>
@@ -850,6 +860,12 @@ async function loadAI(data) {
           <input type="password" data-f="api_key" autocomplete="off" placeholder="${p.key_set ? "Tersimpan (" + esc(p.key_hint) + "). Kosongkan untuk tetap memakai yang lama." : "Tempel key di sini"}"></div>`}
         ${p.type === "claude_code" ? `<p class="note" style="margin:0">Memakai CLI <span class="mono">claude</span> dengan langganan Pro/Max/Team. Di komputer yang sudah login Claude Code, tidak perlu token. Untuk server atau Docker, jalankan <span class="mono">claude setup-token</span> sekali lalu tempel token-nya di sini.</p>` : ""}
         ${p.type === "local" ? `<p class="note" style="margin:0">Ollama: <span class="mono">http://localhost:11434/v1</span>. LM Studio: <span class="mono">http://localhost:1234/v1</span>. Dari Docker, MR Pilot otomatis memakai <span class="mono">host.docker.internal</span>.</p>` : ""}
+        <div><label>Batas pemakaian <span class="muted">(kosong = bawaan${p.quota.limits.source === "free" ? " paket gratis" : ""}, 0 = tanpa batas)</span></label>
+          <div class="limits">
+            ${limitInput(p, "daily_requests", "Request / hari")}
+            ${limitInput(p, "daily_tokens", "Token / hari")}
+            ${limitInput(p, "rpm", "Request / menit")}
+          </div></div>
         <div class="row"><button class="btn" data-save>Simpan provider</button>
           ${p.key_set ? '<button class="btn ghost" data-clear>Hapus key tersimpan</button>' : ""}
           ${p.custom ? '<button class="btn ghost" data-del>Hapus provider</button>' : ""}<span class="msg" data-save-out></span></div>
@@ -867,11 +883,31 @@ async function loadAI(data) {
     await loadAI(await api("/api/ai", { method: "PUT", body: JSON.stringify({ tasks }) }));
   });
   const st = d.stats.by_provider;
-  $("#ai-stats").innerHTML = (st.length ? `<table><thead><tr><th>Provider</th><th class="num">Panggilan</th><th class="num">Sukses</th><th class="num">Rata-rata</th></tr></thead><tbody>` +
-    st.map(r => `<tr><td class="mono">${esc(r.provider)}</td><td class="num">${fmt(r.n)}</td><td class="num">${Math.round((r.ok || 0) / r.n * 100)}%</td><td class="num">${r.avg_ms ? (r.avg_ms / 1000).toFixed(1) + " dtk" : "–"}</td></tr>`).join("") + `</tbody></table>`
+  $("#ai-stats").innerHTML = (st.length ? `<div class="tscroll"><table><thead><tr><th>Provider</th><th class="num">Request</th><th class="num">Sukses</th><th class="num">Token</th><th class="num" title="Rata-rata waktu jawab">Durasi</th></tr></thead><tbody>` +
+    st.map(r => `<tr><td class="mono" style="word-break:break-all">${esc(r.provider)}</td><td class="num">${fmt(r.n)}</td><td class="num">${Math.round((r.ok || 0) / r.n * 100)}%</td><td class="num">${shortNum((r.tokens_in || 0) + (r.tokens_out || 0))}</td><td class="num">${r.avg_ms ? Math.round(r.avg_ms / 1000) + "s" : "–"}</td></tr>`).join("") + `</tbody></table></div>`
     : `<div class="empty">Belum ada panggilan AI.</div>`)
     + (d.stats.recent_errors.length ? `<div class="panel-b" style="border-top:1px solid var(--line)"><strong style="font-size:13px">Error terakhir</strong><ul style="margin:6px 0 0;padding-left:18px;font-size:12px">` +
       d.stats.recent_errors.slice(0, 6).map(e => `<li><span class="mono">${esc(e.provider)}</span> ${esc(ago(e.ts))}: <span class="muted">${esc(e.error)}</span></li>`).join("") + `</ul></div>` : "");
+}
+const QLEVEL = { ok: "", low: "Hampir habis · mode hemat", exhausted: "Kuota habis" };
+function shortNum(n) { return n >= 1e6 ? (n / 1e6).toFixed(1).replace(".0", "") + "jt" : n >= 1e4 ? Math.round(n / 1e3) + "rb" : n >= 1e3 ? (n / 1e3).toFixed(1).replace(".0", "") + "rb" : String(n); }
+function quotaLine(p) {
+  const q = p.quota; if (!q || !p.enabled) return "";
+  const u = q.usage, l = q.limits, parts = [];
+  parts.push(l.daily_requests ? `${fmt(u.requests)} / ${fmt(l.daily_requests)} request` : `${fmt(u.requests)} request`);
+  parts.push(l.daily_tokens ? `${shortNum(u.tokens)} / ${shortNum(l.daily_tokens)} token` : `${shortNum(u.tokens)} token`);
+  const pct = q.ratio == null ? null : Math.min(100, Math.round(q.ratio * 100));
+  const until = q.cooldown_until ? " s/d " + new Date(q.cooldown_until * 1000).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) : "";
+  return `<div class="quota" title="Pemakaian MR Pilot 24 jam terakhir">
+    ${pct == null ? "" : `<span class="meter" role="img" aria-label="${pct}% dari batas"><i class="${esc(q.level)}" style="width:${pct}%"></i></span>`}
+    <span>${parts.join(" · ")} <span class="muted">(24 jam)</span></span>
+    ${q.level !== "ok" ? `<span class="status-pill ${q.level === "low" ? "warn" : "bad"}">${esc(QLEVEL[q.level])}${esc(until)}</span>` : ""}
+    ${pct == null && p.ready ? `<span class="muted">batas belum diisi</span>` : ""}</div>`;
+}
+function limitInput(p, k, label) {
+  const own = p.limits_custom ? p.limits_custom[k] : null, def = p.quota.limits.source === "free" ? p.quota.limits[k] : null;
+  const ph = def ? "bawaan " + fmt(def) : "tanpa batas";
+  return `<div><label class="muted" style="font-size:12px">${label}</label><input type="number" min="0" inputmode="numeric" data-f="${k}" value="${own == null || own === "" ? "" : esc(own)}" placeholder="${esc(ph)}"></div>`;
 }
 function wireProvider(li) {
   const name = li.dataset.name, body = li.querySelector(".pv-body");
