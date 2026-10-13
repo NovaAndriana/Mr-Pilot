@@ -39,12 +39,17 @@ DEFAULTS = {
             "context_chars": 60000,   # isi lengkap file yang berubah, untuk konteks (0 = mati)
             "standards_chars": 8000,  # dokumen standar tim yang ikut dikirim ke AI review
             "verify": True,           # cek ulang temuan blocker/major (1 panggilan AI tambahan)
+            "post_findings": "manual",  # manual = tombol di kartu | auto = blocker/major langsung | off
             "language": "Indonesia",
             "extra_rules": "",
         },
         "ignore_files": ["*.lock", "go.sum", "package-lock.json", "yarn.lock",
                          "pnpm-lock.yaml", "vendor/*", "*.min.js", "*.snap"],
     },
+    "pipeline": {"enabled": True, "comment_on_mr": True, "log_chars": 20000},
+    "digest": {"enabled": True, "time": "08:30", "weekdays_only": True},
+    "reminders": {"enabled": True, "after_hours": 24, "repeat_hours": 24, "active_from": "08:00",
+                  "active_until": "20:00", "weekdays_only": True},
     "merge": {
         "require_pipeline_success": True,
         "allow_no_pipeline": True,
@@ -267,6 +272,10 @@ def validate(cfg):
     cfg["gitlab"]["url"] = url
     if cfg["review"]["mode"] not in ("llm", "bot", "bot_then_llm"):
         raise ConfigError("review.mode harus llm | bot | bot_then_llm")
+    pf = str(cfg["review"]["llm"].get("post_findings") or "manual").strip().lower()
+    if pf not in ("manual", "auto", "off"):
+        raise ConfigError("review.llm.post_findings harus manual | auto | off")
+    cfg["review"]["llm"]["post_findings"] = pf
     sb = str(cfg["merge"].get("source_branch") or "ask").strip().lower()
     if sb not in ("ask", "keep", "delete"):
         raise ConfigError("merge.source_branch harus ask | keep | delete")

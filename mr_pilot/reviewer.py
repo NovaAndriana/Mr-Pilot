@@ -123,6 +123,7 @@ def normalize(data, source):
                          "evidence": str(f.get("evidence", "") or "").strip()[:600],
                          "detail": str(f.get("detail", "") or "").strip()[:800],
                          "suggestion": str(f.get("suggestion", "") or "").strip()[:600],
+                         "fix_code": str(f.get("fix_code", "") or "").rstrip()[:1500],
                          "confidence": str(f.get("confidence", "") or "").strip().lower()[:10]})
     order = {"blocker": 0, "major": 1, "minor": 2, "info": 3}
     findings = [f for f in findings if f["title"]][:8]
@@ -198,7 +199,8 @@ Jawab HANYA dengan JSON valid (tanpa teks lain) dengan skema:
                 "title": "judul singkat",
                 "evidence": "baris kode persis",
                 "detail": "kenapa ini masalah + dampaknya",
-                "suggestion": "perbaikan konkret (boleh potongan kode singkat)",
+                "suggestion": "perbaikan konkret dalam kalimat",
+                "fix_code": "kode pengganti untuk baris `line` SAJA (persis, dengan indentasi aslinya, boleh beberapa baris). Isi hanya jika perbaikannya cukup dengan mengganti baris itu; selain itu kosongkan",
                 "confidence": "high|medium"}]}"""
 
 VERIFY_PROMPT = """Kamu reviewer kedua yang skeptis. Reviewer pertama menulis temuan di bawah. Periksa SETIAP temuan

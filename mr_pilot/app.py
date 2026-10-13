@@ -7,6 +7,7 @@ from datetime import datetime
 
 from .ai import AIManager
 from .formatting import VERDICT_LABEL, build_messages, e, review_buttons
+from .suggestions import post_findings, postable
 from .gitlab_api import GitLab
 from .quality import CodeQuality
 from .reviewer import Reviewer, heuristic_flags
@@ -60,6 +61,11 @@ class App:
         self.reviewer = Reviewer(cfg, self.gl, self.ai)
         self.teams = Teams(cfg)
         self.quality = CodeQuality(cfg, self.gl, self.store, cfg.get("_base_dir", "."), self.ai)
+        from .pipelines import PipelineWatcher
+        self.pipes = PipelineWatcher(cfg, self.gl, self.store, self.ai, self.safe_send, self.event)
+        from .digest import Digest
+        self.digest = Digest(cfg, self.store, self.safe_send)
+        self._last_tick = 0.0
         self.username = g.get("username") or None
         self.last_poll = 0.0
         self.last_prune = 0.0
@@ -173,6 +179,14 @@ class App:
                     log.debug("detail", exc_info=True)
                     self.store.kv_set("last_poll_error", f"{time.strftime('%H:%M')} {msg}")
                     self.event("error", "Gagal cek GitLab", msg, level="error")
+            if time.time() - self._last_tick >= 60:
+                self._last_tick = time.time()
+                try:
+                    self.digest.tick()
+                except Stop:
+                    raise
+                except Exception as ex:
+                    log.warning("Ringkasan/pengingat gagal: %s", short_error(ex))
             if time.time() - self.last_prune > 86400:
                 self.last_prune = time.time()
                 try:
@@ -292,6 +306,7 @@ class App:
                                    + ("\n<i>Berhenti mencoba sampai ada commit baru.</i>" if attempts == 5 else ""))
                 self.event("error", f"Gagal memproses !{m['iid']}", msg, key, "error")
         self.sync_closed(seen)
+        self.pipes.check_all()
 
     def process(self, pid, iid, rec=None, force_llm=False, header=None):
         key = mr_key(pid, iid)
@@ -349,8 +364,10 @@ class App:
         detail, text = build_messages(mr, review, flags, header, quality)
         if detail:
             self.safe_send(detail)
+        pf_mode = self.cfg["review"]["llm"].get("post_findings", "manual")
         msg_id = self.safe_send(text, buttons=review_buttons(pid, iid, mr["web_url"],
-                                                             self.cfg["merge"]["source_branch"]))
+                                                             self.cfg["merge"]["source_branch"],
+                                                             suggest=pf_mode != "off" and bool(postable(review))))
         if not msg_id and not self.dry:
             # Telegram unreachable: keep the review, retry the card on the next poll
             attempts = ((rec.get("attempts") or 0) + 1) if same_sha and rec else 1
@@ -359,11 +376,15 @@ class App:
             self.event("error", f"Kartu !{iid} gagal dikirim ke Telegram", "dicoba lagi otomatis", key, "error")
             return
         self.store.upsert(key, status="notified", review=review, tg_msg_id=msg_id,
-                          tg_text=text, attempts=0, verdict=review["verdict"], quality=quality, **base)
+                          tg_text=text, attempts=0, notified_at=time.time(), verdict=review["verdict"], quality=quality, **base)
         self.event("review", f"Review !{iid} selesai: {VERDICT_LABEL.get(review['verdict'], review['verdict'])}",
                    review.get("summary", "")[:300], key,
                    {"APPROVE": "success", "REQUEST_CHANGES": "error"}.get(review["verdict"], "warning"))
         log.info("MR %s dinotifikasi (verdict %s)", key, review["verdict"])
+        if pf_mode == "auto" and not self.dry:
+            n, ok, _ = post_findings(self.gl, self.store, mr, review, severities=("blocker", "major"))
+            if n:
+                self.event("review", f"{n} saran dikirim ke !{iid}", f"{ok} bisa langsung di-Apply", key)
 
     def sync_closed(self, open_keys):
         """MRs merged/closed outside the bot, or where I'm no longer reviewer: update card and status."""
@@ -422,7 +443,7 @@ class App:
         if not rec:
             self.tg.answer(cid, "Data MR tidak ditemukan")
             return
-        if action in ("m", "md", "mf", "mfd", "x") and rec["status"] in DONE + ("merging",):
+        if action in ("m", "md", "mf", "mfd", "x", "ps") and rec["status"] in DONE + ("merging",):
             label = {"merged": "sudah di-merge", "rejected": "sudah ditolak", "closed": "sudah ditutup",
                      "merging": "sedang diproses"}[rec["status"]]
             self.tg.answer(cid, f"MR ini {label}")
@@ -439,6 +460,9 @@ class App:
         elif action == "x":
             self.tg.answer(cid)
             self.ask_reject_reason(rec)
+        elif action == "ps":
+            self.tg.answer(cid, "Mengirim saran…")
+            self.send_suggestions(rec)
         elif action == "rr":
             self.tg.answer(cid, "Review ulang…")
             self.process(pid, iid, rec, force_llm=self.reviewer.llm_available(), header="🔁 Review ulang")
@@ -458,8 +482,8 @@ class App:
         cmd = text.split()[0].split("@")[0].lower() if text else ""
         if cmd in ("/start", "/help"):
             self.safe_send("<b>MR Pilot</b>\n/status: MR yang menunggu keputusan\n"
-                           "/cek: cek GitLab sekarang\n\nKartu MR punya tombol Merge, Tolak, "
-                           "Review ulang, dan Buka MR.")
+                           "/cek: cek GitLab sekarang\n/digest: ringkasan sekarang\n\n"
+                           "Kartu MR punya tombol Merge, Tolak, Review ulang, Kirim saran ke MR, dan Buka MR.")
         elif cmd == "/status":
             pend = self.store.by_status("notified", "waiting_bot", "error", "notify_failed")
             if not pend:
@@ -471,6 +495,8 @@ class App:
                     lines.append(f"• <a href=\"{e(r['web_url'], True)}\">!{r['iid']}</a> {e(r['title'])} "
                                  f"[{e(r['status'])}{' · ' + VERDICT_LABEL.get(v, v) if v else ''}]")
                 self.safe_send("\n".join(lines))
+        elif cmd == "/digest":
+            self.digest.send_digest()
         elif cmd == "/cek":
             self.last_poll = time.time()
             self.poll_gitlab()
@@ -526,7 +552,10 @@ class App:
             return
         ok, reason = self.pipeline_ok(mr)
         if not ok:
-            self.safe_send(f"⏸️ !{iid}: {reason}")
+            self.safe_send(f"⏸️ !{iid}: {reason}"
+                           + ("\n<i>Saya kabari begitu pipeline hijau.</i>" if "masih" in reason else ""))
+            if "masih" in reason:
+                self.store.kv_set(f"wait_green:{key}", 1)
             return
         # blocking checks first, then ask: no point confirming a merge that cannot happen yet
         if reasons and not confirmed:
@@ -609,6 +638,26 @@ class App:
             self.event("merged", f"!{iid} di-merge ke {mr['target_branch']}",
                        f"{mr.get('title')} · {teams_line}", key, "success")
             log.info("MR %s merged; teams=%s", key, status)
+
+    def send_suggestions(self, rec):
+        pid, iid = rec["project_id"], rec["iid"]
+        mr = self.gl.get_mr(pid, iid)
+        if mr.get("state") != "opened":
+            self.safe_send(f"MR !{iid} sudah {e(mr.get('state'))}, saran tidak dikirim.")
+            return
+        if mr["sha"] != rec["sha"]:
+            self.safe_send(f"🔄 Ada commit baru di !{iid}. Tap 🔁 Review ulang dulu supaya saran sesuai kode terbaru.")
+            return
+        if not postable(rec.get("review")):
+            self.safe_send(f"Tidak ada temuan dengan lokasi baris yang bisa dikirim untuk !{iid}.")
+            return
+        n, ok, dup = post_findings(self.gl, self.store, mr, rec["review"])
+        if not n and dup:
+            self.safe_send(f"Saran untuk !{iid} sudah pernah dikirim.")
+            return
+        self.safe_send(f"💬 {n} saran dikirim ke <a href=\"{e(mr.get('web_url'), True)}\">!{iid}</a>"
+                       + (f", {ok} bisa langsung di-Apply oleh developer." if ok else "."))
+        self.event("review", f"{n} saran dikirim ke !{iid}", f"{ok} bisa langsung di-Apply", mr_key(pid, iid))
 
     # ---------------------------------------------------------------- reject
     def ask_reject_reason(self, rec):

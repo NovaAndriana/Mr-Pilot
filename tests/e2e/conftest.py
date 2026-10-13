@@ -14,7 +14,9 @@ def pytest_runtest_makereport(item, call):
             except Exception:
                 pass
             try:
-                rep.sections.append(("telegram (last 8)", "\n---\n".join(t[:400] for t in w.tg.texts()[-8:])))
+                rep.sections.append(("telegram (last 8)", "\n---\n".join(
+                    f"[{m} {w.tg.messages[m].get('parse_mode')}] " + w.tg.messages[m]["text"][:300]
+                    for m in w.tg.sent[-8:])))
                 rep.sections.append(("telegram answers", repr(w.tg.answers[-5:])))
             except Exception:
                 pass

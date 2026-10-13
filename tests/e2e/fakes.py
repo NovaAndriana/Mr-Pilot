@@ -106,9 +106,44 @@ class FakeGitLab(Server):
         self.merges = []
         self.deleted_branches = []
         self.raw_requests = []
+        self.pipelines = {}   # (pid, iid) -> [pipeline] newest first; default derived from head_pipeline
+        self.jobs = {}        # pipeline id -> [job]
+        self.traces = {}      # job id -> log text
         self.note_seq = 1000
         self.merge_behaviour = {}  # (pid, iid) -> callable or None
         super().__init__(_GitLabHandler)
+
+    def diff_lines(self, key, path):
+        """New-file line numbers present in the MR diff of `path` (added + context lines)."""
+        out = set()
+        for d in self.mr_diffs.get(key, []):
+            if d["new_path"] != path:
+                continue
+            n = None
+            for ln in d["diff"].splitlines():
+                m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)", ln)
+                if m:
+                    n = int(m.group(1))
+                elif n is not None and not ln.startswith("-"):
+                    out.add(n)
+                    n += 1
+        return out
+
+    def fail_pipeline(self, iid, pipeline_id, jobs, pid=7):
+        """jobs: [(name, stage, log_text)] -> MR's newest pipeline is failed with those jobs."""
+        self.pipelines[(pid, iid)] = [{"id": pipeline_id, "status": "failed", "sha": self.mrs[(pid, iid)]["sha"],
+                                       "web_url": f"{self.url}/pipelines/{pipeline_id}"}]
+        self.mrs[(pid, iid)]["head_pipeline"] = {"status": "failed"}
+        self.jobs[pipeline_id] = []
+        for k, (name, stage, text) in enumerate(jobs):
+            jid = pipeline_id * 10 + k
+            self.jobs[pipeline_id].append({"id": jid, "name": name, "stage": stage, "status": "failed",
+                                           "web_url": f"{self.url}/jobs/{jid}"})
+            self.traces[jid] = text
+
+    def set_pipeline(self, iid, pipeline_id, status, pid=7):
+        self.pipelines[(pid, iid)] = [{"id": pipeline_id, "status": status, "sha": self.mrs[(pid, iid)]["sha"]}]
+        self.mrs[(pid, iid)]["head_pipeline"] = {"status": status}
 
     def add_mr(self, iid, title, sha, author=("Dewi Lestari", "dewi.l"), pipeline="success", description="",
                files=None, commit_msg=None, pid=7, conflicts=False, draft=False, reviewers=("nova.andriana",),
@@ -227,7 +262,17 @@ class _GitLabHandler(_Base):
                             n["body"], n["updated_at"] = body["body"], _now_iso()
                             return self._json(200, n)
                     return self._json(404, {"message": "404 Note Not Found"})
+                if sub == "/pipelines" and method == "GET":
+                    pls = f.pipelines.get(key)
+                    if pls is None:
+                        hp = mr.get("head_pipeline")
+                        pls = [{"id": 90000 + key[1], "sha": mr["sha"], **hp}] if hp else []
+                    return self._json(200, pls)
                 if sub == "/discussions" and method == "POST":
+                    pos = body.get("position")
+                    if pos:  # like GitLab: an inline comment must sit on a line of the diff
+                        if pos.get("new_line") not in f.diff_lines(key, pos.get("new_path")):
+                            return self._json(400, {"message": "400 Bad request - Note {:line_code=>[\"can't be blank\"]}"})
                     f.discussions.append((key, body))
                     return self._json(201, {"id": "d1", "notes": [{"body": body["body"]}]})
                 if sub == "/approve" and method == "POST":
@@ -246,6 +291,20 @@ class _GitLabHandler(_Base):
                     if body.get("should_remove_source_branch", mr.get("force_remove_source_branch")):
                         f.deleted_branches.append(mr["source_branch"])
                     return self._json(200, dict(mr))
+            m = re.match(r"^/projects/(\d+)/pipelines/(\d+)/jobs$", p)
+            if m and method == "GET":
+                jobs = f.jobs.get(int(m.group(2)), [])
+                scope = q.get("scope[]") or []
+                return self._json(200, [j for j in jobs if not scope or j.get("status") in scope])
+            m = re.match(r"^/projects/(\d+)/jobs/(\d+)/trace$", p)
+            if m and method == "GET":
+                b = f.traces.get(int(m.group(2)), "").encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+                return
             m = re.match(r"^/projects/(\d+)/repository/files/(.+)/raw$", p)
             if m and method == "GET":
                 f.raw_requests.append((m.group(2), (q.get("ref") or [""])[0]))

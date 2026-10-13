@@ -17,7 +17,7 @@ from .util import short_error
 
 log = logging.getLogger("mr_pilot.ai")
 
-TASKS = {"review": "Review MR", "standards": "Cek standar kode"}
+TASKS = {"review": "Review MR", "standards": "Cek standar kode", "pipeline": "Jelaskan pipeline gagal"}
 
 TYPES = {
     "anthropic": {"label": "Anthropic API (Claude)", "base_url": "https://api.anthropic.com",

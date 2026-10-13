@@ -138,7 +138,7 @@ def w():
         "TELEGRAM_CHAT_ID": str(FakeTelegram.CHAT), "TELEGRAM_API_BASE": W.tg.url, "REVIEW_MODE": "llm",
         "TEAMS_MODE": "power_automate", "TEAMS_FLOW_URL": W.teams.url + "/flow?sig=SECRETsig123",
         "CODE_QUALITY_ENABLED": "true", "COMMIT_COMMENTS": "true", "DASHBOARD_PASSWORD": PASSWORD,
-        "DASHBOARD_HOST": "127.0.0.1", "DASHBOARD_PORT": str(W.port),
+        "DASHBOARD_HOST": "127.0.0.1", "DASHBOARD_PORT": str(W.port), "DIGEST_ENABLED": "false",
     }
     with open(os.path.join(W.data, ".env"), "w") as f:
         f.write("# e2e\n" + "".join(f"{k}={v}\n" for k, v in W.env_file.items()))
@@ -166,10 +166,15 @@ def w():
         print("data:", W.data)
 
 
+def done_count(W):
+    return sum(1 for t in W.tg.texts() if t.startswith("Selesai cek GitLab"))
+
+
 def cek(W):
-    n = len(W.tg.sent)
+    """Send /cek and wait for ITS reply: every /cek answers exactly once, so count replies."""
+    before = done_count(W)
     W.tg.say("/cek")
-    wait(lambda: W.tg.find("Selesai cek GitLab", n), 40, "/cek selesai")
+    wait(lambda: done_count(W) > before, 40, "/cek selesai")
 
 
 def db_status(W, key):
@@ -390,7 +395,13 @@ def test_12_telegram_outage_card_is_retried(w):
     w.tg.say("/cek")
     wait(lambda: w.tg.log.count("sendMessage") - base >= 4, 60, "percobaan kirim")
     wait(lambda: db_status(w, "7:440") == "notify_failed", 60, "status notify_failed (kartu tidak hilang)")
+    before = done_count(w)
     w.tg.faults.clear()
+    # the /cek sent during the outage may still answer now; absorb it so the next /cek isn't confused
+    try:
+        wait(lambda: done_count(w) > before, 15, "balasan /cek saat gangguan")
+    except AssertionError:
+        pass  # its reply was lost in the outage
     n = len(w.tg.sent)
     cek(w)
     card(w, 440, n)
@@ -933,3 +944,129 @@ def test_32_reset_clears_history_keeps_keys(w):
     cek(w)
     card(w, 540, n)
     assert len(w.gl.commit_comments) == comments, "komentar commit tidak boleh diposting ulang"
+
+
+GO_TEST_LOG = ("\x1b[0KRunning with gitlab-runner 17.0.0\n$ go test ./...\nok  \tidas/a\t0.1s\n"
+               "--- FAIL: TestQuotaPerUser (0.01s)\n    quota_test.go:42: expected 5, got 4\nFAIL\n"
+               "FAIL\tidas/quota\t0.02s\nexport CI_TOKEN=glpat-SECRETsecretSECRET1234\n"
+               "\x1b[31;1mERROR: Job failed: exit code 1\x1b[0;m\n")
+
+
+def test_33_failed_pipeline_is_explained_and_green_is_announced(w):
+    title = "feat: kuota per user"
+    w.gl.add_mr(580, title, "c6" * 20, files={"internal/q/quota.go": GO_OK})
+    n = len(w.tg.sent)
+    cek(w)
+    mid = card(w, 580, n)
+    seen = {}
+    old = w.ai_b.reply
+
+    def reply(payload):
+        system, user = payload["messages"][0]["content"], payload["messages"][1]["content"]
+        if "engineer DevOps" in system:
+            seen["user"] = user
+            return {"category": "test", "cause": "Test TestQuotaPerUser gagal: kuota dihitung 4, seharusnya 5.",
+                    "where": "quota_test.go:42", "fix": "Periksa pengurangan kuota saat dokumen dibatalkan.",
+                    "code_problem": True, "confidence": "high"}
+        return old(payload) if callable(old) else old
+    w.ai_b.reply = reply
+    try:
+        w.gl.fail_pipeline(580, 7700, [("unit-test", "test", GO_TEST_LOG)])
+        n = len(w.tg.sent)
+        notes = len(w.gl.notes_by_me(580))
+        cek(w)
+        msg = wait(lambda: w.tg.find("Pipeline gagal", n), 20, "penjelasan pipeline")
+    finally:
+        w.ai_b.reply = old
+    t = w.tg.messages[msg]["text"]
+    assert "!580" in t and "unit-test" in t and "Test gagal" in t and "kuota dihitung 4" in t
+    assert "quota_test.go:42" in t and "Periksa pengurangan kuota" in t and "expected 5, got 4" in t
+    assert "glpat-SECRET" not in t and "glpat-SECRET" not in seen["user"], "token di log CI harus disensor"
+    assert "\x1b" not in seen["user"] and "--- FAIL: TestQuotaPerUser" in seen["user"]
+    note = wait(lambda: [x for x in w.gl.notes_by_me(580) if "CI gagal" in x["body"]], 10, "komentar CI di MR")
+    assert len(w.gl.notes_by_me(580)) == notes + 1
+    assert "Periksa pengurangan kuota" in note[0]["body"]
+    # same pipeline: no repeat
+    n = len(w.tg.sent)
+    cek(w)
+    assert not w.tg.find("Pipeline gagal", n)
+    # developer pushes a fix; pipeline runs; Nova taps Merge too early -> told it will be announced
+    w.gl.set_pipeline(580, 7701, "running")
+    n = len(w.tg.sent)
+    w.tg.press(mid, "m|7|580")
+    wait(lambda: w.tg.find("Saya kabari begitu pipeline hijau", n), 15, "janji kabar hijau")
+    w.gl.set_pipeline(580, 7701, "success")
+    n = len(w.tg.sent)
+    cek(w)
+    green = wait(lambda: w.tg.find("hijau", n), 20, "kabar pipeline hijau")
+    assert "!580" in w.tg.messages[green]["text"] and any("Merge" in b for b in w.tg.buttons(green))
+    assert not any(k == (7, 580) for k, _ in w.gl.merges), "kabar saja, merge tetap keputusan Nova"
+
+
+def test_34_send_suggestions_to_mr(w):
+    title = "fix: query kuota"
+    w.verdicts[title] = {"verdict": "NEEDS_ATTENTION", "findings": [
+        {"severity": "major", "file": "internal/q/usecase.go", "line": 4, "title": "SQL injection",
+         "detail": "id dari request digabung ke query.", "suggestion": "Pakai parameter query.",
+         "evidence": 'q := "SELECT * FROM t WHERE id=" + id', "fix_code": '\tq := "SELECT * FROM t WHERE id = ?"'},
+        {"severity": "minor", "file": "internal/q/usecase.go", "line": 2, "title": "Error diabaikan",
+         "evidence": "data, _ := repo.Find(id)", "suggestion": "Tangani error dari repo.Find."},
+        {"severity": "major", "file": "internal/q/usecase.go", "line": 3, "title": "Halusinasi",
+         "evidence": "db.MustExec(raw)"}]}
+    w.gl.add_mr(590, title, "c7" * 20, files={"internal/q/usecase.go": GO_BAD})
+    n = len(w.tg.sent)
+    cek(w)
+    mid = card(w, 590, n)
+    assert "💬 Kirim saran ke MR" in w.tg.buttons(mid)
+    before = len(w.gl.discussions)
+    n = len(w.tg.sent)
+    w.tg.press(mid, w.tg.buttons(mid)["💬 Kirim saran ke MR"])
+    done = wait(lambda: w.tg.find("saran dikirim", n), 20, "konfirmasi saran")
+    assert "2 saran dikirim" in w.tg.messages[done]["text"] and "1 bisa langsung di-Apply" in w.tg.messages[done]["text"]
+    posted = [b for k, b in w.gl.discussions[before:] if k == (7, 590) and "Saran review" in b["body"]]
+    assert len(posted) == 2
+    sql = next(b for b in posted if "SQL injection" in b["body"])
+    assert sql["position"]["new_line"] == 4 and sql["position"]["new_path"] == "internal/q/usecase.go"
+    assert '```suggestion:-0+0\n\tq := "SELECT * FROM t WHERE id = ?"\n```' in sql["body"]
+    assert not any("Halusinasi" in b["body"] for b in posted), "temuan tanpa bukti tidak dikirim"
+    n = len(w.tg.sent)
+    w.tg.press(mid, w.tg.buttons(mid)["💬 Kirim saran ke MR"])
+    wait(lambda: w.tg.find("sudah pernah dikirim", n), 15, "tidak dobel")
+    assert len([1 for k, b in w.gl.discussions if k == (7, 590) and "Saran review" in b["body"]]) == 2
+
+
+def test_35_digest_and_reminders(w):
+    n = len(w.tg.sent)
+    w.tg.say("/digest")
+    d = wait(lambda: w.tg.find("Ringkasan", n), 15, "/digest")
+    t = w.tg.messages[d]["text"]
+    waiting = int(re.search(r"Menunggu keputusan Anda: (\d+)", t).group(1))
+    assert waiting >= 2 and ("!590" in t or f"dan {waiting - 15} lainnya" in t)
+    # scheduled digest + reminders: make them due now, restart
+    cfgp = os.path.join(w.data, "config.yaml")
+    with open(cfgp, encoding="utf-8") as f:
+        s = f.read()
+    s = s.replace("weekdays_only: true", "weekdays_only: false")
+    s = re.sub(r'(?m)^  time: .*$', '  time: "00:00"', s)
+    s = re.sub(r"(?m)^  after_hours: .*$", "  after_hours: 0", s)
+    s = re.sub(r'(?m)^  active_from: .*$', '  active_from: "00:00"', s)
+    s = re.sub(r'(?m)^  active_until: .*$', '  active_until: "23:59"', s)
+    with open(cfgp, "w", encoding="utf-8") as f:
+        f.write(s)
+    w.env["DIGEST_ENABLED"] = "true"
+    if MODE == "docker":
+        w.app.env["DIGEST_ENABLED"] = "true"
+    with open(os.path.join(w.data, ".env")) as f:
+        env_txt = f.read().replace("DIGEST_ENABLED=false", "DIGEST_ENABLED=true")
+    with open(os.path.join(w.data, ".env"), "w") as f:
+        f.write(env_txt)
+    w.app.signal(signal.SIGTERM)
+    assert w.app.wait_exit(40) == 0
+    n = len(w.tg.sent)
+    w.app.start()
+    wait(lambda: w.tg.find("Ringkasan", n), 60, "ringkasan terjadwal")
+    rem = wait(lambda: w.tg.find("menunggu keputusan Anda", n), 60, "pengingat")
+    assert any("Merge" in b for b in w.tg.buttons(rem)), "pengingat punya tombol Merge/Tolak"
+    digests = sum(1 for t in w.tg.texts(n) if "Ringkasan" in t)
+    time.sleep(3)
+    assert sum(1 for t in w.tg.texts(n) if "Ringkasan" in t) == digests == 1, "ringkasan sekali sehari"
