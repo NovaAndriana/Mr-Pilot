@@ -1,0 +1,43 @@
+# GitLab SAST + Secret Detection untuk repo tim (Go, React, React Native).
+#
+# Cara pasang: tempel isi file ini ke .gitlab-ci.yml repo (atau simpan sebagai ci/security.yml lalu
+# `include: - local: ci/security.yml`). Berjalan di semua tier GitLab (Free/Premium/Ultimate).
+#
+# - Job-nya read-only: hanya membaca kode, tidak mengubah repo, dan allow_failure (tidak menahan pipeline).
+# - MR Pilot membaca laporan JSON dari job ini, lalu menampilkannya di dashboard Keamanan dan Telegram.
+#   Karena itu laporan juga disimpan sebagai artifact biasa (artifacts:paths) agar bisa diunduh lewat API
+#   tanpa lisensi Ultimate.
+# - Runner butuh executor Docker/Kubernetes dan akses ke registry.gitlab.com (atau mirror, lihat
+#   SECURE_ANALYZERS_PREFIX di bawah).
+
+include:
+  - template: Jobs/SAST.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+
+# Template keamanan memakai stage "test". Kalau repo sudah punya daftar stages sendiri,
+# pastikan "test" ada di dalamnya, misalnya:
+# stages: [build, test, deploy]
+
+variables:
+  # Jalankan juga di pipeline merge request (GitLab 18.0+). Di versi lama, job berjalan di pipeline branch.
+  AST_ENABLE_MR_PIPELINES: "true"
+  # Folder yang tidak perlu dipindai (test, mock, dependency, hasil build).
+  SAST_EXCLUDED_PATHS: "spec, test, tests, tmp, vendor, node_modules, mocks, **/mocks/**, dist, build, coverage, **/*_test.go, **/*.test.ts, **/*.test.tsx, **/*.spec.ts, **/*.spec.tsx"
+  # Repo tim tidak memakai Java/Groovy/Apex/Elixir: lewati analyzer yang tidak perlu supaya lebih cepat.
+  SAST_EXCLUDED_ANALYZERS: "spotbugs, pmd-apex, sobelow"
+  # Mirror internal untuk image analyzer, kalau runner tidak bisa ke registry.gitlab.com:
+  # SECURE_ANALYZERS_PREFIX: "registry.idas.local/security-products"
+
+# Semua analyzer SAST (semgrep-sast untuk Go/JS/TS/React) mewarisi job "sast".
+sast:
+  artifacts:
+    paths: [gl-sast-report.json]
+    expire_in: 30 days
+
+secret_detection:
+  artifacts:
+    paths: [gl-secret-detection-report.json]
+    expire_in: 30 days
+
+# Scan riwayat commit lama sekali saja setelah pertama kali dipasang (buka CI/CD > Run pipeline,
+# isi variabel SECRET_DETECTION_HISTORIC_SCAN = true). Jangan diaktifkan permanen: lambat.

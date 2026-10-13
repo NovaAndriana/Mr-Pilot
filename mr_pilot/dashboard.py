@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 
 import yaml
 
+from . import insights
 from .standards import Standards
 from .util import redact
 
@@ -480,6 +481,21 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if u.path in ("/", "/index.html"):
                 return self._static("index.html", "text/html; charset=utf-8")
+            if u.path in ("/security", "/dora"):
+                return self._static(u.path[1:] + ".html", "text/html; charset=utf-8")
+            if u.path == "/static/app.css":
+                return self._static("app.css", "text/css; charset=utf-8")
+            if u.path == "/static/common.js":
+                return self._static("common.js", "text/javascript; charset=utf-8")
+            if u.path == "/api/security":
+                p = (q.get("project") or [""])[0]
+                return self._send(200, insights.security_data(self.app.cfg, self.app.store,
+                                                              int(p) if p.isdigit() else None,
+                                                              self._qint(q, "days", 30, 7, 180)))
+            if u.path == "/api/dora":
+                p = (q.get("project") or [""])[0]
+                return self._send(200, insights.dora_data(self.app.cfg, self.app.store, self._qint(q, "days", 30, 7, 365),
+                                                          int(p) if p.isdigit() else None))
             if u.path == "/api/summary":
                 return self._send(200, self.app.data.summary())
             if u.path == "/api/quality":
@@ -577,6 +593,10 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"models": self.app.ai.list_models(body.get("name"))})
                 except Exception as ex:
                     return self._send(200, {"models": [], "error": redact(ex)[:300]})
+            if method == "POST" and u.path in ("/api/security/sync", "/api/dora/sync"):
+                which = "sec" if "security" in u.path else "dora"
+                self.app.store.kv_set(f"{which}_sync_request", time.time())
+                return self._send(202, {"ok": True, "message": "Sinkronisasi dijadwalkan, biasanya selesai dalam 1 menit."})
             if method == "POST" and u.path == "/api/standards/test":
                 return self._send(200, self.app.files.test(body.get("path"), body.get("code")))
         except (ValueError, TypeError, KeyError) as ex:  # bad input from the form: answer 400, no traceback

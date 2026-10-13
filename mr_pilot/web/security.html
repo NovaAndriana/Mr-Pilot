@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keamanan · MR Pilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <a class="brand" href="/" style="text-decoration:none">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="2.5" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="18" r="2.5" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="12" r="2.5" stroke="var(--accent)" stroke-width="2"/><path d="M6 8.5v7M8.3 7.2c4 .8 6.2 2.2 7.4 3.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      MR Pilot
+    </a>
+    <nav aria-label="Halaman">
+      <a class="navlink" href="/">Review MR</a>
+      <a class="navlink" href="/security" aria-current="page">Keamanan</a>
+      <a class="navlink" href="/dora">DORA</a>
+    </nav>
+    <div class="status">
+      <span class="hide-sm" id="synced"></span>
+      <button class="btn ghost sm" id="sync">Pindai sekarang</button>
+      <button class="icon-btn" id="theme" title="Ganti tema" aria-label="Ganti tema terang/gelap">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      </button>
+      <form method="post" action="/logout">
+        <button class="icon-btn" type="submit" title="Keluar" aria-label="Keluar dari dashboard">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </form>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="hero-line"><span class="hero-num" id="h-num">–</span><span class="hero-text" id="h-text">temuan keamanan terbuka</span></div>
+  <p class="hero-sub" id="h-sub">Hasil GitLab SAST dan Secret Detection dari pipeline branch utama tiap project.</p>
+
+  <div class="filters">
+    <select id="f-project" aria-label="Project"><option value="">Semua project</option></select>
+    <div class="seg" id="f-kind" role="group" aria-label="Jenis">
+      <button data-v="" aria-pressed="true">Semua</button><button data-v="sast" aria-pressed="false">SAST</button><button data-v="secret" aria-pressed="false">Secret</button>
+    </div>
+    <div class="seg" id="f-sev" role="group" aria-label="Severity">
+      <button data-v="" aria-pressed="true">Semua level</button><button data-v="serious" aria-pressed="false">Critical + High</button>
+    </div>
+  </div>
+
+  <div class="tiles" id="tiles" style="margin-top:0"></div>
+
+  <div class="layout">
+    <div>
+      <div class="panel">
+        <div class="panel-h"><h2>Temuan terbuka</h2><span class="muted" id="f-count" style="font-size:13px"></span></div>
+        <div class="tscroll" id="findings"></div>
+      </div>
+      <div class="panel" style="margin-top:24px">
+        <div class="panel-h"><h2>Temuan baru dan yang diperbaiki, 30 hari</h2></div>
+        <div class="panel-b"><div class="chart" id="c-trend"></div></div>
+      </div>
+    </div>
+    <aside>
+      <div class="panel" id="mr-panel" hidden>
+        <div class="panel-h"><h2>MR yang membawa temuan baru</h2></div>
+        <ul class="plist" id="mrs"></ul>
+      </div>
+      <div class="panel" style="margin-top:24px" id="proj-panel">
+        <div class="panel-h"><h2>Project</h2></div>
+        <ul class="plist" id="projects"></ul>
+      </div>
+      <div class="panel" style="margin-top:24px" id="setup">
+        <div class="panel-h"><h2>Cara memasang</h2></div>
+        <div class="panel-b" style="display:grid;gap:12px">
+          <ol class="steps">
+            <li>Tempel konfigurasi di bawah ke <span class="mono">.gitlab-ci.yml</span> repo (lewat MR seperti biasa).</li>
+            <li>Pastikan daftar <span class="mono">stages</span> repo punya <span class="mono">test</span>.</li>
+            <li>Setelah pipeline branch utama selesai, klik <b>Pindai sekarang</b>.</li>
+          </ol>
+          <p class="note" style="margin:0">Jalan di semua tier GitLab. Job-nya hanya membaca kode dan tidak menahan pipeline. MR Pilot tidak mengubah repo apa pun.</p>
+          <div class="row" style="justify-content:space-between"><span class="mono muted" style="font-size:12px">standards/ci/gitlab-ci-security.yml</span><button class="btn ghost sm" id="copy">Salin</button></div>
+          <pre class="code" id="snippet"></pre>
+        </div>
+      </div>
+    </aside>
+  </div>
+</main>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="/static/common.js"></script>
+<script>
+"use strict";
+const SEVL = { critical: "Critical", high: "High", medium: "Medium", low: "Low", info: "Info", unknown: "Unknown" };
+const STATE = { ok: ["ok", "Terpindai"], partial: ["warn", "Sebagian"], not_configured: ["no", "Belum dipasang"],
+                no_report: ["warn", "Laporan tidak terbaca"], no_pipeline: ["no", "Belum ada pipeline"], error: ["bad", "Gagal dicek"] };
+let data = null, kind = store.get("sec-kind") || "", sev = store.get("sec-sev") || "", project = store.get("sec-project") || "";
+
+function toast(t) { const el = $("#toast"); el.textContent = t; el.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => el.hidden = true, 3500); }
+function seg(id, cur, set) {
+  $(id).querySelectorAll("button").forEach(b => {
+    b.setAttribute("aria-pressed", String(b.dataset.v === cur));
+    b.onclick = () => { set(b.dataset.v); seg(id, b.dataset.v, set); render(); };
+  });
+}
+
+async function load() {
+  data = await api("/api/security" + (project ? "?project=" + encodeURIComponent(project) : ""));
+  render();
+}
+
+function render() {
+  if (!data) return;
+  const k = data.kpi;
+  $("#h-num").textContent = fmt(k.open);
+  $("#h-text").textContent = k.open === 1 ? "temuan keamanan terbuka" : "temuan keamanan terbuka";
+  $("#h-sub").innerHTML = !data.projects.length
+    ? "Belum ada project yang dipindai. Project diambil dari MR yang masuk ke Anda, atau dari <span class=\"mono\">security.projects</span> di config."
+    : `${k.critical ? `<strong>${k.critical} critical</strong>, ` : ""}${k.high} high, ${k.secrets} secret · ${k.configured} dari ${k.projects} project sudah memasang scanner`;
+  $("#synced").textContent = data.last_sync ? "Dipindai " + ago(data.last_sync) : "";
+  const sel = $("#f-project");
+  if (sel.options.length === 1) {
+    data.projects.forEach(p => sel.add(new Option(p.project, p.project_id)));
+    sel.value = project;
+    sel.onchange = () => { project = sel.value; store.set("sec-project", project); load(); };
+  }
+  $("#tiles").innerHTML = [
+    ["Critical", k.critical, "perlu ditangani segera"],
+    ["High", k.high, "sebelum rilis berikutnya"],
+    ["Secret terbuka", k.secrets, "rotasi kunci yang bocor"],
+    ["Diperbaiki, 30 hari", k.fixed, k.median_fix_hours != null ? "median " + dur(k.median_fix_hours * 3600) + " sampai beres" : `${k.opened} temuan baru`],
+  ].map(([l, n, s]) => `<div class="tile"><div class="l">${esc(l)}</div><div class="n">${fmt(n)}</div><div class="s">${esc(s)}</div></div>`).join("");
+
+  let rows = data.findings;
+  if (kind) rows = rows.filter(r => r.kind === kind);
+  if (sev === "serious") rows = rows.filter(r => r.kind === "secret" || r.severity === "critical" || r.severity === "high");
+  $("#f-count").textContent = rows.length + " ditampilkan";
+  $("#findings").innerHTML = rows.length ? `<table><thead><tr><th>Level</th><th>Temuan</th><th class="col-sm-hide">Lokasi</th><th>Sejak</th></tr></thead><tbody>` +
+    rows.slice(0, 300).map(r => { const loc = r.web_url ? `<a href="${esc(r.web_url)}" target="_blank" rel="noopener">${esc(r.file)}${r.line ? ":" + r.line : ""}</a>` : esc(r.file || "–"); return `<tr>
+      <td><span class="sv ${esc(r.severity)}">${esc(SEVL[r.severity] || r.severity)}</span></td>
+      <td><div><span class="kind ${r.kind === "secret" ? "secret" : ""}">${r.kind === "secret" ? "Secret" : "SAST"}</span> ${esc(r.name)}</div>
+          <div class="mono only-sm" style="font-size:12px;overflow-wrap:anywhere">${loc}</div>
+          <div class="muted" style="font-size:12px">${esc(r.project)}${r.rule ? " · " + (r.rule_url ? `<a href="${esc(r.rule_url)}" target="_blank" rel="noopener">${esc(r.rule)}</a>` : esc(r.rule)) : ""}</div>
+          ${r.description ? `<details style="font-size:12px;margin-top:4px"><summary class="muted">Penjelasan</summary><div style="white-space:pre-wrap;color:var(--ink-2)">${esc(r.description)}</div></details>` : ""}</td>
+      <td class="mono col-sm-hide">${loc}</td>
+      <td style="white-space:nowrap">${esc(ago(r.first_seen))}</td></tr>`; }).join("") + `</tbody></table>`
+    : `<div class="empty"><strong>${data.kpi.open ? "Tidak ada yang cocok dengan filter" : "Tidak ada temuan terbuka"}</strong>${data.projects.some(p => ["ok", "partial"].includes(p.state)) ? "Scanner berjalan dan tidak menemukan masalah." : "Pasang scanner di repo dulu (lihat Cara memasang)."}</div>`;
+
+  lineChart($("#c-trend"), data.trend, [
+    { key: "opened", label: "Temuan baru", color: "--s2", short: "baru" },
+    { key: "fixed", label: "Diperbaiki", color: "--s1", short: "beres" },
+  ], { label: "Temuan keamanan baru dan yang diperbaiki per hari" });
+
+  $("#mr-panel").hidden = !data.mrs.length;
+  $("#mrs").innerHTML = data.mrs.map(m => `<li>
+      <div class="pn"><a href="${esc(m.web_url)}" target="_blank" rel="noopener"><span class="mono" style="color:var(--accent)">!${m.iid}</span> ${esc(m.title)}</a></div>
+      <div class="pd">${m.serious ? `<span class="status-pill bad">${esc(m.summary)}</span>` : `<span class="status-pill warn">${esc(m.summary)}</span>`}</div>
+      <div class="pd">${(m.findings || []).slice(0, 4).map(f => `${esc(SEVL[f.severity])}: ${esc(f.name)} <span class="mono">${esc(f.file)}${f.line ? ":" + f.line : ""}</span>`).join("<br>")}</div>
+    </li>`).join("");
+
+  $("#projects").innerHTML = data.projects.length ? data.projects.map(p => {
+    const [cls, label] = STATE[p.state] || ["no", p.state];
+    const o = p.open;
+    return `<li><div class="row" style="justify-content:space-between;gap:8px"><span class="pn">${p.web_url ? `<a href="${esc(p.web_url)}" target="_blank" rel="noopener">${esc(p.project)}</a>` : esc(p.project)}</span><span class="status-pill ${cls}">${esc(label)}</span></div>
+      ${["ok", "partial"].includes(p.state) ? `<div class="counts"><span class="sv critical">${o.critical}</span><span class="sv high">${o.high}</span><span class="sv medium">${o.medium}</span><span class="sv low">${o.low + o.other}</span><span class="kind secret">${o.secret} secret</span></div>` : ""}
+      <div class="pd">${p.detail ? esc(p.detail) : ""}${p.last_scan ? ` Dipindai ${esc(ago(p.last_scan))}${p.ref ? " dari " + esc(p.ref) : ""}${p.pipeline_url ? ` · <a href="${esc(p.pipeline_url)}" target="_blank" rel="noopener">pipeline</a>` : ""}.` : ""}</div></li>`;
+  }).join("") : `<li><div class="pd">Belum ada project.</div></li>`;
+  const needSetup = !data.projects.length || data.projects.some(p => ["not_configured", "no_report"].includes(p.state));
+  $("#setup h2").textContent = needSetup ? "Cara memasang" : "Konfigurasi CI";
+  $("#snippet").textContent = data.ci_snippet || "";
+}
+
+$("#copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(data.ci_snippet || ""); toast("Konfigurasi disalin."); }
+  catch { toast("Tidak bisa menyalin otomatis, pilih teksnya lalu salin manual."); }
+};
+$("#sync").onclick = async () => {
+  $("#sync").disabled = true;
+  try { const r = await api("/api/security/sync", { method: "POST", body: "{}" }); toast(r.message); }
+  catch (ex) { toast("Gagal: " + ex.message); }
+  setTimeout(() => { $("#sync").disabled = false; load(); }, 20000);
+};
+seg("#f-kind", kind, v => { kind = v; store.set("sec-kind", v); });
+seg("#f-sev", sev, v => { sev = v; store.set("sec-sev", v); });
+initTheme(render);
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(render, 150); });
+load().catch(ex => { $("#h-sub").textContent = "Gagal memuat: " + ex.message; });
+setInterval(() => { if (!document.hidden) load().catch(() => {}); }, 60000);
+</script>
+</body>
+</html>

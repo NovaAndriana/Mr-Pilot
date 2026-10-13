@@ -50,6 +50,23 @@ class Store:
             CREATE TABLE IF NOT EXISTS ai_calls(
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, provider TEXT, task TEXT,
                 ok INTEGER, ms INTEGER, error TEXT);
+            CREATE TABLE IF NOT EXISTS sec_findings(
+                fp TEXT PRIMARY KEY, project_id INTEGER, project TEXT, kind TEXT, severity TEXT, name TEXT,
+                description TEXT, file TEXT, line INTEGER, rule TEXT, rule_url TEXT, scanner TEXT,
+                status TEXT, first_seen REAL, last_seen REAL, fixed_at REAL, pipeline_id INTEGER,
+                ref TEXT, sha TEXT, web_url TEXT);
+            CREATE INDEX IF NOT EXISTS ix_sec_proj ON sec_findings(project_id, status);
+            CREATE TABLE IF NOT EXISTS sec_projects(
+                project_id INTEGER PRIMARY KEY, project TEXT, web_url TEXT, ref TEXT, state TEXT, detail TEXT,
+                last_scan REAL, pipeline_id INTEGER, pipeline_url TEXT, checked_at REAL);
+            CREATE TABLE IF NOT EXISTS dora_deploys(
+                key TEXT PRIMARY KEY, project_id INTEGER, project TEXT, env TEXT, source TEXT, sha TEXT,
+                ref TEXT, finished_at REAL, n_commits INTEGER, lead_median REAL, lead_values TEXT,
+                fix_commit INTEGER DEFAULT 0, rollback INTEGER DEFAULT 0, web_url TEXT, title TEXT);
+            CREATE INDEX IF NOT EXISTS ix_dora_ts ON dora_deploys(project_id, finished_at);
+            CREATE TABLE IF NOT EXISTS dora_incidents(
+                key TEXT PRIMARY KEY, project_id INTEGER, project TEXT, title TEXT, created_at REAL,
+                closed_at REAL, web_url TEXT);
         """)
         have_ai = {r[1] for r in self.db.execute("PRAGMA table_info(ai_calls)")}
         for col in ("tokens_in", "tokens_out"):
@@ -191,7 +208,10 @@ class Store:
         with self.lock:
             for sql, days in (("DELETE FROM events WHERE ts < ?", events_days),
                               ("DELETE FROM ai_calls WHERE ts < ?", ai_days),
-                              ("DELETE FROM violations WHERE scope='commit' AND ts < ?", violations_days)):
+                              ("DELETE FROM violations WHERE scope='commit' AND ts < ?", violations_days),
+                              ("DELETE FROM sec_findings WHERE status='fixed' AND fixed_at < ?", 180),
+                              ("DELETE FROM dora_deploys WHERE finished_at < ?", 400),
+                              ("DELETE FROM dora_incidents WHERE created_at < ?", 400)):
                 n += self.db.execute(sql, (now - days * 86400,)).rowcount
             # reject prompts that were never answered
             n += self.db.execute("DELETE FROM kv WHERE k LIKE 'reject:%' AND rowid NOT IN "
@@ -203,11 +223,14 @@ class Store:
     # logged-out sessions, Telegram update offset, cached GitLab username
     KEEP_KV = ("cq_%", "revoked_sessions", "tg_offset", "gitlab_user")
 
+    HISTORY_TABLES = ("mrs", "events", "violations", "ai_calls", "sec_findings", "sec_projects", "dora_deploys",
+                      "dora_incidents")
+
     def reset(self, everything=False):
         """Delete history (MRs, activity, violations, AI stats, transient kv). Returns {table: rows}."""
         out = {}
         with self.lock:
-            for t in ("mrs", "events", "violations", "ai_calls"):
+            for t in self.HISTORY_TABLES:
                 out[t] = self.db.execute(f"DELETE FROM {t}").rowcount
             if everything:
                 out["kv"] = self.db.execute("DELETE FROM kv").rowcount
@@ -221,8 +244,7 @@ class Store:
 
     def counts(self):
         with self.lock:
-            return {t: self.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-                    for t in ("mrs", "events", "violations", "ai_calls")}
+            return {t: self.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in self.HISTORY_TABLES}
 
     def integrity_ok(self):
         with self.lock:
@@ -232,3 +254,9 @@ class Store:
     def query(self, sql, params=()):
         with self.lock:
             return [dict(r) for r in self.db.execute(sql, params).fetchall()]
+
+    def execute(self, sql, params=(), many=False):
+        with self.lock:
+            cur = (self.db.executemany if many else self.db.execute)(sql, params)
+            self.db.commit()
+            return cur.rowcount

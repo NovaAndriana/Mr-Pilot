@@ -111,7 +111,17 @@ class FakeGitLab(Server):
         self.traces = {}      # job id -> log text
         self.note_seq = 1000
         self.merge_behaviour = {}  # (pid, iid) -> callable or None
+        # security reports + DORA data
+        self.project = {"id": 7, "path_with_namespace": "idas/idas-repo-be", "default_branch": "main",
+                        "web_url": None}
+        self.branch_pipes = {}  # ref -> [pipeline] newest first
+        self.artifacts = {}     # (job id, path) -> bytes
+        self.environments = []
+        self.deployments = []   # oldest first
+        self.compares = {}      # (from, to) -> [commit]
+        self.issues = []
         super().__init__(_GitLabHandler)
+        self.project["web_url"] = f"{self.url}/idas/idas-repo-be"
 
     def diff_lines(self, key, path):
         """New-file line numbers present in the MR diff of `path` (added + context lines)."""
@@ -291,6 +301,39 @@ class _GitLabHandler(_Base):
                     if body.get("should_remove_source_branch", mr.get("force_remove_source_branch")):
                         f.deleted_branches.append(mr["source_branch"])
                     return self._json(200, dict(mr))
+            if re.match(r"^/projects/(\d+|idas%2Fidas-repo-be|idas/idas-repo-be)$", p) and method == "GET":
+                return self._json(200, f.project)
+            m = re.match(r"^/projects/(\d+)/pipelines$", p)
+            if m and method == "GET":
+                rows = f.branch_pipes.get((q.get("ref") or [""])[0], [])
+                st = (q.get("status") or [None])[0]
+                return self._json(200, [x for x in rows if not st or x["status"] == st])
+            m = re.match(r"^/projects/(\d+)/jobs/(\d+)/artifacts/(.+)$", p)
+            if m and method == "GET":
+                b = f.artifacts.get((int(m.group(2)), m.group(3)))
+                if b is None:
+                    return self._json(404, {"message": "404 Not Found"})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+                return
+            m = re.match(r"^/projects/(\d+)/environments$", p)
+            if m and method == "GET":
+                return self._paged(f.environments, q)
+            m = re.match(r"^/projects/(\d+)/deployments$", p)
+            if m and method == "GET":
+                env = (q.get("environment") or [None])[0]
+                return self._paged([d for d in f.deployments if d["environment"]["name"] == env], q)
+            m = re.match(r"^/projects/(\d+)/repository/compare$", p)
+            if m and method == "GET":
+                return self._json(200, {"commits": f.compares.get(((q.get("from") or [""])[0], (q.get("to") or [""])[0]), [])})
+            m = re.match(r"^/projects/(\d+)/issues$", p)
+            if m and method == "GET":
+                it, lab = (q.get("issue_type") or [None])[0], (q.get("labels") or [None])[0]
+                return self._paged([i for i in f.issues if (not it or i.get("issue_type") == it)
+                                    and (not lab or lab in i.get("labels", []))], q)
             m = re.match(r"^/projects/(\d+)/pipelines/(\d+)/jobs$", p)
             if m and method == "GET":
                 jobs = f.jobs.get(int(m.group(2)), [])

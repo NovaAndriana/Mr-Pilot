@@ -59,7 +59,13 @@ DEFAULTS = {
         "squash": False,
         "confirm_if_not_approved": True,
         "confirm_if_quality_errors": True,
+        "confirm_if_security": True,
     },
+    "security": {"enabled": True, "projects": [], "branch": "", "interval_minutes": 30, "mr_check": True,
+                 "alert_min_severity": "high", "auto_project_days": 120},
+    "dora": {"enabled": True, "projects": [], "source": "auto", "environment": "auto", "production_branch": "",
+             "incident_labels": ["incident"], "fix_pattern": "", "lookback_days": 90, "interval_minutes": 60,
+             "weekly_report": True, "auto_project_days": 120},
     "code_quality": {
         "enabled": False,
         "standards_dir": "standards",
@@ -284,7 +290,27 @@ def validate(cfg):
         raise ConfigError("teams.mode harus power_automate | telegram_copy | off")
     if cfg["code_quality"]["report"].get("status_fail_on", "none") not in ("none", "error", "warning"):
         raise ConfigError("code_quality.report.status_fail_on harus none | error | warning")
-    for k in ("gitlab.verify_ssl", "code_quality.enabled", "dashboard.enabled"):
+    _int(cfg, "security.interval_minutes", lo=5, hi=1440)
+    _int(cfg, "dora.interval_minutes", lo=10, hi=1440)
+    _int(cfg, "dora.lookback_days", lo=7, hi=365)
+    if str(cfg["security"].get("alert_min_severity", "high")).lower() not in ("critical", "high", "medium", "low", "info"):
+        raise ConfigError("security.alert_min_severity harus critical | high | medium | low | info")
+    cfg["security"]["alert_min_severity"] = str(cfg["security"].get("alert_min_severity", "high")).lower()
+    if str(cfg["dora"].get("source", "auto")).lower() not in ("auto", "deployments", "pipelines", "merges"):
+        raise ConfigError("dora.source harus auto | deployments | pipelines | merges")
+    cfg["dora"]["source"] = str(cfg["dora"].get("source") or "auto").lower()
+    if cfg["dora"].get("fix_pattern"):
+        try:
+            re.compile(cfg["dora"]["fix_pattern"])
+        except re.error as ex:
+            raise ConfigError(f"dora.fix_pattern bukan regex yang valid: {ex}") from None
+    for sec in ("security", "dora"):
+        if not isinstance(cfg[sec].get("projects") or [], list):
+            raise ConfigError(f"{sec}.projects harus daftar, mis. [\"grup/repo\"]")
+    if isinstance(cfg["dora"].get("incident_labels"), str):
+        cfg["dora"]["incident_labels"] = [x.strip() for x in cfg["dora"]["incident_labels"].split(",") if x.strip()]
+    for k in ("gitlab.verify_ssl", "code_quality.enabled", "dashboard.enabled", "security.enabled", "dora.enabled",
+              "security.mr_check", "dora.weekly_report"):
         a, b = k.split(".")
         v = cfg[a][b]
         if isinstance(v, str):

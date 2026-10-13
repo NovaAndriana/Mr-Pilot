@@ -1,6 +1,8 @@
 """Main loop: poll GitLab -> review -> Telegram buttons -> merge -> Teams."""
 import logging
 import os
+import queue
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime
@@ -66,6 +68,16 @@ class App:
         self.ai.notify = self.safe_send  # quota alerts (80% / exhausted) go to Telegram
         from .digest import Digest
         self.digest = Digest(cfg, self.store, self.safe_send)
+        # Security + DORA read lots of GitLab data: they run on a background thread with their own HTTP
+        # session, so a long first sync never delays a Merge tap. Their Telegram messages are queued and
+        # sent from the main loop.
+        from .dora import DoraCollector
+        from .security import SecurityWatcher
+        self._bg_out = queue.Queue()
+        bg_gl = gl or GitLab(g["url"], g["token"], verify=g["verify_ssl"])
+        self.security = SecurityWatcher(cfg, bg_gl, self.store, self._bg_send, self.event)
+        self.dora = DoraCollector(cfg, bg_gl, self.store, self._bg_send, self.event)
+        self._bg_thread = None
         self._last_tick = 0.0
         self.username = g.get("username") or None
         self.last_poll = 0.0
@@ -156,9 +168,40 @@ class App:
                 self.safe_send(f"⚠️ Merge !{rec['iid']} terputus (MR Pilot sempat berhenti). "
                                f"MR masih terbuka, silakan tap Merge lagi.")
 
+    def _bg_send(self, text, **kw):
+        self._bg_out.put((text, kw))
+
+    def _drain_bg(self):
+        while True:
+            try:
+                text, kw = self._bg_out.get_nowait()
+            except queue.Empty:
+                return
+            self.safe_send(text, **kw)
+
+    def start_background(self):
+        if self._bg_thread or not (self.security.enabled or self.dora.enabled):
+            return
+
+        def loop():
+            while not self.stop_requested:
+                for name, job in (("keamanan", self.security), ("DORA", self.dora)):
+                    try:
+                        job.tick()
+                    except Exception as ex:
+                        log.warning("Sinkron %s gagal: %s", name, short_error(ex))
+                        log.debug("detail", exc_info=True)
+                for _ in range(5):
+                    if self.stop_requested:
+                        return
+                    time.sleep(1)
+        self._bg_thread = threading.Thread(target=loop, name="mrp-security-dora", daemon=True)
+        self._bg_thread.start()
+
     def run_forever(self):
         self.ensure_user()
         self.recover()
+        self.start_background()
         self.event("system", "MR Pilot aktif", f"Memantau MR untuk @{self.username}")
         interval = int(self.cfg["gitlab"]["poll_interval_seconds"])
         log.info("MR Pilot jalan untuk @%s (cek tiap %ss)", self.username, interval)
@@ -196,6 +239,7 @@ class App:
                         log.info("Pembersihan data lama: %s baris", n)
                 except Exception:
                     log.exception("prune gagal")
+            self._drain_bg()
             self.poll_telegram(interval)
 
     def poll_telegram(self, interval):
@@ -483,7 +527,8 @@ class App:
         cmd = text.split()[0].split("@")[0].lower() if text else ""
         if cmd in ("/start", "/help"):
             self.safe_send("<b>MR Pilot</b>\n/status: MR yang menunggu keputusan\n"
-                           "/cek: cek GitLab sekarang\n/digest: ringkasan sekarang\n/kuota: pemakaian AI\n\n"
+                           "/cek: cek GitLab sekarang\n/digest: ringkasan sekarang\n/kuota: pemakaian AI\n"
+                           "/keamanan: temuan SAST & secret\n/dora: performa delivery tim\n\n"
                            "Kartu MR punya tombol Merge, Tolak, Review ulang, Kirim saran ke MR, dan Buka MR.")
         elif cmd == "/status":
             pend = self.store.by_status("notified", "waiting_bot", "error", "notify_failed")
@@ -498,6 +543,10 @@ class App:
                 self.safe_send("\n".join(lines))
         elif cmd == "/kuota":
             self.safe_send(self.ai.quota_report())
+        elif cmd == "/keamanan":
+            self.safe_send(self.security.report())
+        elif cmd == "/dora":
+            self.safe_send(self.dora.report())
         elif cmd == "/digest":
             self.digest.send_digest()
         elif cmd == "/cek":
@@ -535,6 +584,9 @@ class App:
         q_err = ((rec.get("quality") or {}).get("counts") or {}).get("error", 0)
         if mcfg.get("confirm_if_quality_errors") and q_err:
             reasons.append(f"Standar kode: ❌ {q_err} error")
+        sec = self.security.mr_result(pid, iid, rec.get("sha"))
+        if mcfg.get("confirm_if_security", True) and sec and sec.get("serious"):
+            reasons.append(f"Keamanan: temuan baru dari MR ini ({sec['summary']})")
 
         mr = self.gl.get_mr(pid, iid)
         key = mr_key(pid, iid)

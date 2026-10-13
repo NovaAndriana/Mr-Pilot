@@ -73,6 +73,8 @@ def cmd_reset(cfg, data_dir, a):
     print(f"  - Aktivitas / events     : {counts.get('events', 0)}")
     print(f"  - Pelanggaran standar    : {counts.get('violations', 0)}")
     print(f"  - Statistik panggilan AI : {counts.get('ai_calls', 0)}")
+    print(f"  - Data keamanan & DORA   : {sum(counts.get(t, 0) for t in ('sec_findings', 'dora_deploys', 'dora_incidents'))}"
+          " (diambil ulang dari GitLab saat jalan)")
     print(f"  - File log               : {len(logs)} file ({os.path.dirname(log_file)})")
     print("Yang TETAP: data/.env (token & API key), config.yaml, standards/, pengaturan AI, password dashboard.")
     if a.all:

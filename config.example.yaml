@@ -70,6 +70,32 @@ merge:
   squash: false
   confirm_if_not_approved: true   # minta konfirmasi kedua jika verdict bukan Approve
   confirm_if_quality_errors: true # minta konfirmasi kedua jika ada error standar kode
+  confirm_if_security: true       # minta konfirmasi kedua jika MR membawa secret / temuan keamanan high+ baru
+
+security:
+  # Membaca hasil GitLab SAST + Secret Detection dari pipeline (konfigurasi CI: standards/ci/gitlab-ci-security.yml).
+  # Read-only, jalan di semua tier GitLab. Dashboard: /security · Telegram: /keamanan
+  enabled: ${SECURITY_ENABLED:-true}
+  projects: []                    # kosong = project dari MR yang masuk ke Anda; atau mis. ["idas/idas-repo-be"]
+  branch: ""                      # kosong = default branch tiap project
+  interval_minutes: 30            # pindai ulang pipeline terbaru tiap sekian menit
+  mr_check: true                  # cek pipeline MR yang menunggu Anda: temuan baru dari MR itu
+  alert_min_severity: high        # notif Telegram untuk temuan baru >= level ini (secret selalu dinotif)
+
+dora:
+  # Metrik DORA dari data GitLab (tanpa Ultimate). Dashboard: /dora · Telegram: /dora
+  enabled: ${DORA_ENABLED:-true}
+  projects: []                    # kosong = sama seperti security
+  source: auto                    # auto | deployments | pipelines | merges
+                                  # auto = deployment ke environment production; kalau tidak ada,
+                                  # pipeline sukses di production_branch
+  environment: auto               # nama environment produksi (auto = tier production / nama production|prod)
+  production_branch: ""           # kosong = default branch project (mis. main)
+  incident_labels: [incident]     # issue dengan label ini dihitung sebagai incident (selain issue tipe Incident)
+  fix_pattern: ""                 # regex hotfix/revert/rollback; kosong = bawaan
+  lookback_days: 90
+  interval_minutes: 60
+  weekly_report: true             # ringkasan DORA tiap Senin (jam digest.time) di Telegram
 
 ai:
   # Provider dicoba sesuai `order`; jika gagal (error/timeout/kuota), otomatis pindah ke berikutnya.

@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DORA · MR Pilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <a class="brand" href="/" style="text-decoration:none">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="2.5" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="18" r="2.5" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="12" r="2.5" stroke="var(--accent)" stroke-width="2"/><path d="M6 8.5v7M8.3 7.2c4 .8 6.2 2.2 7.4 3.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      MR Pilot
+    </a>
+    <nav aria-label="Halaman">
+      <a class="navlink" href="/">Review MR</a>
+      <a class="navlink" href="/security">Keamanan</a>
+      <a class="navlink" href="/dora" aria-current="page">DORA</a>
+    </nav>
+    <div class="status">
+      <button class="btn ghost sm" id="copy">Salin ringkasan</button>
+      <button class="btn ghost sm" id="sync">Sinkronkan</button>
+      <button class="icon-btn" id="theme" title="Ganti tema" aria-label="Ganti tema terang/gelap">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      </button>
+      <form method="post" action="/logout">
+        <button class="icon-btn" type="submit" title="Keluar" aria-label="Keluar dari dashboard">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </form>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="hero-line"><span class="hero-text" style="font-size:26px">Performa delivery tim</span></div>
+  <p class="hero-sub" id="h-sub">Empat metrik DORA: seberapa sering tim merilis, seberapa cepat perubahan sampai ke produksi, seberapa sering rilis bermasalah, dan seberapa cepat pulih.</p>
+
+  <div class="filters">
+    <div class="seg" id="f-days" role="group" aria-label="Periode">
+      <button data-v="30" aria-pressed="true">30 hari</button><button data-v="90" aria-pressed="false">90 hari</button>
+    </div>
+    <select id="f-project" aria-label="Project"><option value="">Semua project</option></select>
+    <span class="muted" id="period" style="font-size:13px"></span>
+  </div>
+
+  <div class="metrics" id="metrics"></div>
+
+  <div class="grid4">
+    <div class="panel"><div class="panel-h"><h2>Deployment per minggu</h2></div><div class="panel-b"><div class="chart" id="c-df"></div></div></div>
+    <div class="panel"><div class="panel-h"><h2>Lead time (median)</h2></div><div class="panel-b"><div class="chart" id="c-lt"></div></div></div>
+    <div class="panel"><div class="panel-h"><h2>Change failure rate (%)</h2></div><div class="panel-b"><div class="chart" id="c-cfr"></div></div></div>
+    <div class="panel"><div class="panel-h"><h2>Waktu pemulihan (median)</h2></div><div class="panel-b"><div class="chart" id="c-rec"></div></div></div>
+  </div>
+
+  <div class="panel" style="margin-top:24px">
+    <div class="panel-h"><h2>Per project</h2></div>
+    <div class="tscroll" id="projects"></div>
+  </div>
+
+  <div class="layout" style="margin-top:24px">
+    <div class="panel">
+      <div class="panel-h"><h2>Deployment terakhir</h2><span class="muted" style="font-size:13px" id="dep-count"></span></div>
+      <div class="tscroll" id="deploys"></div>
+    </div>
+    <aside>
+      <div class="panel">
+        <div class="panel-h"><h2>Incident</h2></div>
+        <ul class="plist" id="incidents"></ul>
+      </div>
+    </aside>
+  </div>
+  <div class="panel" style="margin-top:24px">
+    <div class="panel-h"><h2>Cara menghitung</h2></div>
+    <div class="panel-b grid2" style="font-size:13px;color:var(--ink-2)" id="how"></div>
+  </div>
+</main>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="/static/common.js"></script>
+<script>
+"use strict";
+const LV = { elite: "Elite", high: "High", medium: "Medium", low: "Low" };
+const REASON = { "hotfix/revert": "diikuti hotfix/revert", rollback: "di-rollback", incident: "ada incident" };
+let data = null, days = store.get("dora-days") || "30", project = store.get("dora-project") || "";
+
+function toast(t) { const el = $("#toast"); el.textContent = t; el.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => el.hidden = true, 3500); }
+// one unit per chart axis: hours, or days when the values run past ~4 days
+const hrsFor = (rows, key) => {
+  const max = Math.max(0, ...rows.map(r => r[key] ?? 0));
+  return max >= 96 ? (v => (v / 24).toFixed(1).replace(".0", "") + " hr") : (v => (v >= 10 ? Math.round(v) : v.toFixed(1).replace(".0", "")) + " j");
+};
+function durS(sec) {
+  if (sec == null) return ["–", ""];
+  if (sec < 3600) return [Math.max(1, Math.round(sec / 60)), "menit"];
+  if (sec < 2 * 86400) return [(sec / 3600).toFixed(1).replace(".0", ""), "jam"];
+  return [(sec / 86400).toFixed(1).replace(".0", ""), "hari"];
+}
+function freq(perDay) {
+  if (perDay == null || perDay === 0) return ["0", "deploy"];
+  if (perDay >= 1) return [perDay.toFixed(1).replace(".0", ""), "/ hari"];
+  if (perDay * 7 >= 1) return [(perDay * 7).toFixed(1).replace(".0", ""), "/ minggu"];
+  return [(perDay * 30).toFixed(1).replace(".0", ""), "/ bulan"];
+}
+function delta(cur, prev, lowerBetter, show) {
+  if (cur == null || prev == null || !isFinite(cur) || !isFinite(prev) || Math.abs(cur - prev) < 1e-9) return `<div class="d">${prev == null ? "Belum ada periode sebelumnya" : "Sama dengan periode sebelumnya"}</div>`;
+  const up = cur > prev, good = lowerBetter ? !up : up;
+  return `<div class="d ${good ? "good" : "bad"}">${up ? "↑" : "↓"} dari ${esc(show(prev))} periode sebelumnya, ${good ? "membaik" : "memburuk"}</div>`;
+}
+const lvl = l => `<span class="lvl ${l || "none"}">${l ? LV[l] : "Belum ada data"}</span>`;
+
+async function load() {
+  data = await api(`/api/dora?days=${days}` + (project ? "&project=" + encodeURIComponent(project) : ""));
+  render();
+}
+
+function render() {
+  if (!data) return;
+  const m = data.current, p = data.previous, L = m.levels;
+  const sel = $("#f-project");
+  if (sel.options.length === 1) {
+    data.project_list.forEach(x => sel.add(new Option(x.project, x.project_id)));
+    sel.value = project;
+    sel.onchange = () => { project = sel.value; store.set("dora-project", project); load(); };
+  }
+  $("#period").textContent = `${m.deployments} deployment · ${m.commits} commit dalam ${data.days} hari`;
+  const [fv, fu] = freq(m.deploy_freq), [lv, lu] = durS(m.lead_time), [rv, ru] = durS(m.recovery);
+  const cards = [
+    ["Deployment frequency", fv, fu, L.deploy_freq, delta(m.deploy_freq, p.deployments ? p.deploy_freq : null, false, v => freq(v).join(" ")),
+     "Seberapa sering tim berhasil merilis ke produksi."],
+    ["Lead time for changes", lv, lu, L.lead_time, delta(m.lead_time, p.lead_time, true, v => durS(v).join(" ")),
+     "Median waktu dari commit sampai berjalan di produksi."],
+    ["Change failure rate", m.cfr == null ? "–" : Math.round(m.cfr * 100), m.cfr == null ? "" : `% · ${m.failed} dari ${m.deployments}`, L.cfr,
+     delta(m.cfr, p.cfr, true, v => Math.round(v * 100) + "%"), "Porsi rilis yang perlu hotfix, revert, rollback, atau memicu incident."],
+    ["Waktu pemulihan", rv, ru, L.recovery, delta(m.recovery, p.recovery, true, v => durS(v).join(" ")),
+     "Median waktu dari rilis bermasalah (atau incident) sampai pulih."],
+  ];
+  $("#metrics").innerHTML = cards.map(([t, v, u, l, d, def]) => `<div class="metric">
+      <div class="l"><span>${esc(t)}</span>${lvl(l)}</div>
+      <div class="n">${esc(v)}<small>${esc(u)}</small></div>${d}<div class="def">${esc(def)}</div></div>`).join("");
+  if (m.open_incidents) $("#h-sub").innerHTML = `<strong>${m.open_incidents} incident masih terbuka.</strong> Empat metrik DORA untuk tim, dihitung dari data GitLab.`;
+
+  const w = data.weekly, wl = d => "minggu " + shortDate(d);
+  stackedColumns($("#c-df"), w, [{ key: "deployments", label: "Deployment", color: "--s1" }], { label: "Deployment per minggu", height: 200 });
+  lineChart($("#c-lt"), w, [{ key: "lead_hours", label: "Lead time", color: "--s1" }], { label: "Median lead time per minggu", fmt: hrsFor(w, "lead_hours"), height: 200, dateLabel: wl });
+  lineChart($("#c-cfr"), w, [{ key: "cfr_pct", label: "Change failure rate", color: "--s2" }], { label: "Change failure rate per minggu", fmt: v => Math.round(v) + "%", height: 200, dateLabel: wl });
+  lineChart($("#c-rec"), w, [{ key: "recovery_hours", label: "Waktu pemulihan", color: "--s2" }], { label: "Median waktu pemulihan per minggu", fmt: hrsFor(w, "recovery_hours"), height: 200, dateLabel: wl });
+
+  $("#projects").innerHTML = data.projects.length ? `<table><thead><tr><th>Project</th><th>Sumber data</th><th class="num">Deployment</th><th>Frekuensi</th><th>Lead time</th><th>Failure rate</th><th>Pemulihan</th></tr></thead><tbody>` +
+    data.projects.map(r => `<tr><td class="mono">${esc(r.project)}</td><td class="muted">${esc(r.source || "")}</td><td class="num">${fmt(r.deployments)}</td>
+      <td>${esc(freq(r.deploy_freq).join(" "))} ${lvl(r.levels.deploy_freq)}</td>
+      <td>${esc(durS(r.lead_time).join(" "))} ${r.lead_time != null ? lvl(r.levels.lead_time) : ""}</td>
+      <td>${r.cfr == null ? "–" : Math.round(r.cfr * 100) + "%"} ${r.cfr != null ? lvl(r.levels.cfr) : ""}</td>
+      <td>${esc(durS(r.recovery).join(" "))} ${r.recovery != null ? lvl(r.levels.recovery) : ""}</td></tr>`).join("") + `</tbody></table>`
+    : `<div class="empty"><strong>Belum ada data deployment</strong>MR Pilot mengambil project dari MR yang masuk ke Anda. Data muncul setelah sinkronisasi pertama.</div>`;
+
+  $("#dep-count").textContent = data.deployments.length ? `${data.deployments.length} terbaru` : "";
+  $("#deploys").innerHTML = data.deployments.length ? `<table><thead><tr><th>Waktu</th><th>Project</th><th>Commit</th><th class="num">Commit baru</th><th>Lead time</th><th>Status</th></tr></thead><tbody>` +
+    data.deployments.map(d => `<tr><td style="white-space:nowrap">${esc(clock(d.finished_at))}</td><td class="mono">${esc(d.project)}</td>
+      <td class="mono">${d.web_url ? `<a href="${esc(d.web_url)}" target="_blank" rel="noopener">${esc(d.sha)}</a>` : esc(d.sha)}${d.fix ? ' <span class="kind">hotfix</span>' : ""}${d.rollback ? ' <span class="kind">rollback</span>' : ""}</td>
+      <td class="num">${d.n_commits == null ? "–" : fmt(d.n_commits)}</td><td>${esc(d.lead_median == null ? "–" : durS(d.lead_median).join(" "))}</td>
+      <td>${d.failed ? `<span class="status-pill bad">Bermasalah · ${esc(REASON[d.failed] || d.failed)}</span>` : `<span class="status-pill ok">Lancar</span>`}</td></tr>`).join("") + `</tbody></table>`
+    : `<div class="empty">Belum ada deployment di periode ini.</div>`;
+
+  $("#incidents").innerHTML = data.incidents.length ? data.incidents.map(i => `<li><div class="pn"><a href="${esc(i.web_url)}" target="_blank" rel="noopener">${esc(i.title)}</a></div>
+      <div class="pd">${esc(i.project)} · dibuka ${esc(clock(i.created_at))} · ${i.closed_at ? "pulih dalam " + esc(durS(i.closed_at - i.created_at).join(" ")) : "<b>masih terbuka</b>"}</div></li>`).join("")
+    : `<li><div class="pd">Tidak ada incident di periode ini. Incident = issue tipe Incident atau berlabel ${esc((data.config.incident_labels || []).join(", ") || "incident")}.</div></li>`;
+
+  $("#how").innerHTML = `<div style="display:grid;gap:12px">
+    <div><b>Sumber data per project</b><ul style="margin:6px 0 0;padding-left:18px">${data.sources.map(s => `<li><span class="mono">${esc(s.project)}</span>: ${esc(s.label || "belum disinkronkan")}${s.at ? `, ${esc(ago(s.at))}` : ""}</li>`).join("") || "<li>Belum ada.</li>"}</ul></div>
+    ${data.errors.length ? `<div class="msg bad">${data.errors.map(x => esc(x.project + ": " + x.error)).join("<br>")}</div>` : ""}
+    <div>Deployment = deployment sukses ke environment produksi. Kalau tim belum memakai environment GitLab, dipakai pipeline sukses di branch produksi (atur <span class="mono">dora.production_branch</span>).</div>
+    <div>Rilis dihitung <b>bermasalah</b> kalau rilis berikutnya berisi hotfix/revert/rollback, atau ada incident dalam 7 hari setelahnya.</div></div>
+    <div><div class="tscroll"><table><thead><tr><th>Level</th><th>Frekuensi</th><th>Lead time</th><th>Failure</th><th>Pulih</th></tr></thead><tbody>
+      <tr><td>${lvl("elite")}</td><td>≥ 1/hari</td><td>&lt; 1 hari</td><td>≤ 5%</td><td>&lt; 1 jam</td></tr>
+      <tr><td>${lvl("high")}</td><td>≥ 1/minggu</td><td>&lt; 1 minggu</td><td>≤ 20%</td><td>&lt; 1 hari</td></tr>
+      <tr><td>${lvl("medium")}</td><td>≥ 1/bulan</td><td>&lt; 1 bulan</td><td>≤ 30%</td><td>&lt; 1 minggu</td></tr>
+      <tr><td>${lvl("low")}</td><td>lebih jarang</td><td>lebih lama</td><td>&gt; 30%</td><td>lebih lama</td></tr></tbody></table></div>
+    <div class="muted" style="font-size:12px;margin-top:8px">Acuan klaster DORA (State of DevOps 2024). Untuk failure rate, laporan itu tidak berurutan (medium 10%, high 20%), jadi medium di sini ≤ 30%.</div></div>`;
+}
+
+function summaryText() {
+  const m = data.current, L = m.levels;
+  const sel = $("#f-project"), scope = sel.value ? sel.options[sel.selectedIndex].text : "semua project";
+  return [`Metrik DORA ${data.days} hari terakhir (${scope}), ${m.deployments} deployment:`,
+    `- Deployment frequency: ${freq(m.deploy_freq).join(" ")} (${LV[L.deploy_freq] || "-"})`,
+    `- Lead time for changes: ${durS(m.lead_time).join(" ")} (${LV[L.lead_time] || "-"})`,
+    `- Change failure rate: ${m.cfr == null ? "-" : Math.round(m.cfr * 100) + "%"} (${m.failed} dari ${m.deployments} rilis) (${LV[L.cfr] || "-"})`,
+    `- Waktu pemulihan: ${durS(m.recovery).join(" ")} (${LV[L.recovery] || "-"})`].join("\n");
+}
+$("#copy").onclick = async () => {
+  if (!data) return;
+  try { await navigator.clipboard.writeText(summaryText()); toast("Ringkasan disalin, siap ditempel ke Teams."); }
+  catch { toast("Tidak bisa menyalin otomatis."); }
+};
+$("#sync").onclick = async () => {
+  $("#sync").disabled = true;
+  try { const r = await api("/api/dora/sync", { method: "POST", body: "{}" }); toast(r.message); }
+  catch (ex) { toast("Gagal: " + ex.message); }
+  setTimeout(() => { $("#sync").disabled = false; load(); }, 20000);
+};
+$("#f-days").querySelectorAll("button").forEach(b => {
+  b.setAttribute("aria-pressed", String(b.dataset.v === days));
+  b.onclick = () => { days = b.dataset.v; store.set("dora-days", days); $("#f-days").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b))); load(); };
+});
+initTheme(render);
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(render, 150); });
+load().catch(ex => { $("#h-sub").textContent = "Gagal memuat: " + ex.message; });
+setInterval(() => { if (!document.hidden) load().catch(() => {}); }, 120000);
+</script>
+</body>
+</html>

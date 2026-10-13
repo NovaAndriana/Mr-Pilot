@@ -21,7 +21,7 @@ MR baru (Anda Reviewer / Assignee) ─► review otomatis ─► kartu di Telegr
 - **Dashboard realtime**: antrian MR, aktivitas langsung, tren pelanggaran standar, editor standar, dan pengaturan AI.
 - **AI multi-provider**: Claude Code (langganan), Anthropic, Gemini, OpenRouter, Groq, OpenAI, dan lokal (Ollama/LM Studio). Ada urutan fallback otomatis dan provider per tugas, semuanya diatur dari dashboard.
 - **Jalan di Docker**, satu perintah `setup` untuk PC lokal maupun server, plus **CI/CD** GitHub Actions / GitLab CI yang dikonfigurasi otomatis.
-- Perintah Telegram: `/status`, `/cek`, `/help`.
+- Perintah Telegram: `/status`, `/cek`, `/digest`, `/kuota`, `/keamanan`, `/dora`, `/help`.
 
 ---
 
@@ -169,6 +169,7 @@ Semua ada di folder **`standards/`**. Bisa diedit langsung, atau lewat **dashboa
 | `pr-checklist.md` | Checklist PR yang wajib ada di deskripsi MR | Cek otomatis |
 | `rules.yaml` | Aturan regex yang dicek di **setiap baris yang ditambahkan** | Cek otomatis per commit |
 | `ci/gitlab-ci-quality.yml` | Contoh job CI untuk gofmt, go vet, golangci-lint, ESLint, dan tsc | Salin ke repo |
+| `ci/gitlab-ci-security.yml` | GitLab SAST + Secret Detection (lihat bagian 3a) | Salin ke repo |
 
 Stack ditentukan dari path file (`code_quality.stacks`). Sesuaikan `paths` dengan struktur repo Anda, misalnya `web/**` untuk FE.
 
@@ -198,11 +199,60 @@ python -m mr_pilot --check-standards internal/workflow/usecase.go
 
 `status_fail_on: error` membuat status commit merah jika ada error. Kalau project memakai "Pipelines must succeed", ini **ikut menahan merge**. Default-nya `none` (hanya informasi).
 
+## 3a. Keamanan: GitLab SAST + Secret Detection
+
+Scanner bawaan GitLab berjalan di pipeline repo tim. MR Pilot membaca hasilnya lalu menampilkannya di **dashboard Keamanan** (`/security`) dan Telegram. Ini bisa dipakai di semua tier GitLab: laporan JSON tersedia di Free/Premium, sedangkan security dashboard bawaan GitLab hanya ada di Ultimate.
+
+**1. Pasang konfigurasi CI di tiap repo.** Isinya ada di `standards/ci/gitlab-ci-security.yml` (juga bisa disalin dari dashboard Keamanan → *Cara memasang*). Tempel ke `.gitlab-ci.yml` repo lewat MR biasa:
+```yaml
+include:
+  - template: Jobs/SAST.gitlab-ci.yml               # Semgrep: Go, JavaScript/TypeScript, React
+  - template: Jobs/Secret-Detection.gitlab-ci.yml   # token, password, private key yang ter-commit
+variables:
+  AST_ENABLE_MR_PIPELINES: "true"                   # GitLab 18.0+: ikut jalan di pipeline MR
+sast:
+  artifacts: { paths: [gl-sast-report.json] }       # agar laporan bisa diunduh lewat API
+secret_detection:
+  artifacts: { paths: [gl-secret-detection-report.json] }
+```
+- Job memakai stage `test`, jadi pastikan `test` ada di `stages` repo.
+- Runner butuh executor Docker/Kubernetes dan akses ke `registry.gitlab.com`. Kalau tidak ada akses, isi `SECURE_ANALYZERS_PREFIX` dengan mirror internal.
+- Job-nya hanya membaca kode dan `allow_failure`, jadi tidak menahan pipeline. MR Pilot sendiri tidak mengubah repo apa pun.
+- Setelah dipasang, jalankan sekali pipeline manual dengan `SECRET_DETECTION_HISTORIC_SCAN=true` untuk memeriksa riwayat commit lama.
+
+**2. Yang dilakukan MR Pilot** (`security.*` di config):
+- **Pemindaian rutin:** tiap 30 menit, MR Pilot membaca laporan dari pipeline terbaru di branch utama tiap project. Daftar project diambil dari MR yang masuk ke Anda, atau dari `security.projects`.
+- **Status temuan:** MR Pilot mencatat temuan yang masih terbuka dan yang sudah beres, lengkap dengan kapan ditemukan dan berapa lama sampai diperbaiki.
+- **Notifikasi:**
+  - Temuan baru level **high** ke atas, dan **setiap secret**, dikirim ke Telegram.
+  - Pemindaian pertama hanya dijadikan patokan, jadi tidak memicu notifikasi.
+- **Pengecekan MR:** untuk MR yang menunggu keputusan Anda, MR Pilot membandingkan hasil pipeline MR dengan branch utama. Kalau MR itu membawa secret atau temuan high/critical baru, Anda dapat notifikasi. Tombol Merge juga meminta konfirmasi dulu (`merge.confirm_if_security`).
+- **Nilai secret tidak pernah disimpan atau ditampilkan.** Yang tersimpan hanya jenis, lokasi, dan aturannya.
+- **Perintah Telegram:** `/keamanan` menampilkan ringkasan temuan terbuka per project.
+
+## 3b. DORA: performa delivery tim
+
+**Dashboard DORA** (`/dora`) menghitung empat metrik DORA dari data GitLab, tanpa perlu Ultimate:
+
+| Metrik | Cara MR Pilot menghitung |
+|---|---|
+| Deployment frequency | Jumlah deployment sukses ke environment produksi (environment dengan tier production, atau bernama `production`/`prod`). Kalau tim belum memakai environment, dipakai pipeline sukses di branch produksi. |
+| Lead time for changes | Median waktu dari commit sampai berjalan di produksi. Daftar commit tiap deployment diambil dengan membandingkan deployment itu dengan deployment sebelumnya. |
+| Change failure rate | Porsi deployment yang bermasalah, yaitu yang diikuti hotfix, revert, atau rollback, atau dalam 7 hari setelahnya muncul incident (issue tipe *Incident* atau berlabel `incident`). |
+| Waktu pemulihan | Median waktu dari incident dibuka sampai ditutup, atau dari deployment bermasalah sampai deployment perbaikannya. |
+
+- **Level Elite/High/Medium/Low:** mengacu ke klaster *State of DevOps 2024*. Di dashboard ada tren mingguan, tabel per project, daftar deployment (yang bermasalah ditandai beserta alasannya), dan daftar incident.
+- **Salin ringkasan:** tombol ini menyalin teks siap tempel ke Teams.
+- **Telegram:** `/dora` menampilkan ringkasan 30 hari, dan setiap Senin (jam `digest.time`) laporan mingguan dikirim otomatis (`dora.weekly_report`).
+- **Pengaturan:** semuanya ada di `dora.*`, misalnya `source` (auto | deployments | pipelines | merges), `environment`, `production_branch`, `incident_labels`, dan `fix_pattern`.
+
+> Supaya angkanya akurat, deployment produksi sebaiknya memakai `environment: { name: production }` di job deploy GitLab CI. Kalau deploy dilakukan di luar GitLab (mis. ArgoCD), atur `dora.source: pipelines` dan `dora.production_branch`.
+
 ---
 
 ## 4. Dashboard
 
-Jalan otomatis bersama MR Pilot di **http://127.0.0.1:8787** (atau IP server jika memakai `--server`). Password ada di `data/.env` (`DASHBOARD_PASSWORD`).
+Jalan otomatis bersama MR Pilot di **http://127.0.0.1:8787** (atau IP server jika memakai `--server`). Password ada di `data/.env` (`DASHBOARD_PASSWORD`). Dashboard Keamanan ada di `/security` dan dashboard DORA di `/dora`, masing-masing di halaman terpisah dengan login yang sama.
 
 - **Antrian**: MR yang menunggu keputusan, dengan bar umur (penuh = 24 jam), verdict, error/warning standar, dan pipeline. Klik baris untuk detail lengkap: masalah yang diselesaikan, perubahan, poin bagus, temuan, dan riwayat.
 - **Aktivitas langsung**: MR baru, review selesai, warning diposting, merge, dan tolak. Muncul seketika tanpa refresh (Server-Sent Events).
