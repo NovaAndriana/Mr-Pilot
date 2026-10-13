@@ -124,7 +124,7 @@ def test_store_reset_keeps_gitlab_markers_and_sessions(tmp_path):
         s.kv_set(k, "1")
     deleted = s.reset()
     assert deleted["mrs"] == 1 and deleted["events"] == 1 and deleted["kv"] == 3
-    assert s.counts() == {"mrs": 0, "events": 0, "violations": 0, "ai_calls": 0}
+    assert set(s.counts().values()) == {0} and {"mrs", "sec_findings", "dora_deploys"} <= set(s.counts())
     assert s.kv_get("cq_commit:7:a") and s.kv_get("revoked_sessions") and s.kv_get("tg_offset")
     assert s.kv_get("heartbeat") is None and s.kv_get("reject:5") is None
     s.reset(everything=True)

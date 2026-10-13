@@ -114,6 +114,92 @@ def seed(store, now=None):
         store.db.execute("INSERT INTO events(ts,type,mr_key,title,detail,level) VALUES(?,?,?,?,?,?)",
                          (now - mins * 60, t, None, title, det, lvl))
     store.db.commit()
+    seed_security(store, now)
+    seed_dora(store, now)
+
+
+PROJECTS = [(42, "idas/idas-repo-be"), (43, "idas/akusign-web"), (44, "idas/akusign-mobile")]
+SEC = [  # project, kind, severity, name, file, line, rule, age days, fixed after days (None = open)
+    (42, "sast", "high", "Improper neutralization of special elements in SQL command", "internal/repo/postgres/report.go", 88, "gosec.G202-1", 9, None),
+    (42, "secret", "critical", "GitLab personal access token", "deploy/k8s/staging/configmap.yaml", 14, "gitlab_personal_access_token", 3, None),
+    (42, "sast", "medium", "Use of weak cryptographic primitive (MD5)", "internal/sign/hash.go", 31, "gosec.G401-1", 20, None),
+    (42, "sast", "medium", "Incorrect permission assignment for file", "cmd/worker/main.go", 57, "gosec.G302-1", 26, None),
+    (42, "sast", "low", "Deferring unsafe method Close on writable file", "internal/export/csv.go", 44, "gosec.G307-1", 15, None),
+    (43, "sast", "high", "Cross-site scripting via dangerouslySetInnerHTML", "src/pages/Document/Preview.tsx", 62, "react-dangerouslysetinnerhtml", 5, None),
+    (43, "sast", "medium", "Insecure randomness for token", "src/services/session.ts", 18, "insecure-random", 12, None),
+    (44, "sast", "medium", "Sensitive data in AsyncStorage", "src/store/auth.ts", 27, "rn-asyncstorage-sensitive", 6, None),
+    (42, "sast", "high", "Path traversal in file download", "internal/handler/download.go", 40, "gosec.G304-1", 28, 4),
+    (43, "secret", "critical", "Generic API key", "src/config/env.ts", 7, "generic-api-key", 22, 1),
+    (42, "sast", "medium", "Unhandled error from Close", "internal/repo/postgres/tx.go", 120, "gosec.G104-1", 25, 6),
+    (44, "sast", "low", "Hardcoded URL", "src/api/client.ts", 3, "hardcoded-url", 18, 2),
+]
+
+
+def seed_security(store, now):
+    import hashlib
+    for pid, path in PROJECTS:
+        store.db.execute("INSERT OR REPLACE INTO sec_projects(project_id, project, web_url, ref, state, detail, last_scan, "
+                         "pipeline_id, pipeline_url, checked_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                         (pid, path, f"https://code.idas.id/{path}", "main" if pid != 44 else "develop",
+                          "ok" if pid != 44 else "partial", "" if pid != 44 else "belum ada job Secret",
+                          now - 1500, 9000 + pid, f"https://code.idas.id/{path}/-/pipelines/{9000 + pid}", now - 300))
+    store.db.execute("INSERT OR REPLACE INTO sec_projects(project_id, project, web_url, ref, state, detail, checked_at) "
+                     "VALUES(45, 'idas/emeterai-service', 'https://code.idas.id/idas/emeterai-service', 'main', "
+                     "'not_configured', 'Pipeline branch main belum punya job SAST / Secret Detection.', ?)", (now - 300,))
+    for pid, kind, sev, name, f, line, rule, age, fixed in SEC:
+        path = dict(PROJECTS)[pid]
+        fp = hashlib.sha1(f"{pid}{rule}{f}".encode()).hexdigest()[:20]
+        store.db.execute(
+            "INSERT OR REPLACE INTO sec_findings(fp, project_id, project, kind, severity, name, description, file, line, "
+            "rule, rule_url, scanner, status, first_seen, last_seen, fixed_at, pipeline_id, ref, sha, web_url) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (fp, pid, path, kind, sev, name, "Contoh penjelasan dari scanner untuk demo.", f, line, rule, "",
+             "Semgrep" if kind == "sast" else "Gitleaks", "open" if fixed is None else "fixed", now - age * 86400,
+             now - 1500, None if fixed is None else now - fixed * 86400, 9000 + pid, "main", "a1b2c3d4",
+             f"https://code.idas.id/{path}/-/blob/main/{f}#L{line}"))
+    store.kv_set("sec_mr_new:42:384", '{"sha": null, "pipeline_id": 9384, "summary": "1 secret, 1 critical", '
+                 '"secrets": 1, "serious": 1, "checked_at": %d, "findings": [{"kind": "secret", "severity": "critical", '
+                 '"name": "Generic API key", "file": "web/src/services/quota.ts", "line": 9, "rule": "generic-api-key", '
+                 '"rule_url": ""}]}' % now)
+    store.db.commit()
+
+
+def seed_dora(store, now):
+    import json
+    rnd = random.Random(11)
+    for pid, path in PROJECTS:
+        rate = {42: 0.55, 43: 0.35, 44: 0.15}[pid]
+        t = now - 100 * 86400
+        n = 0
+        while t < now:
+            t += rnd.expovariate(rate) * 86400
+            if t >= now:
+                break
+            if time.localtime(t).tm_wday >= 5:
+                continue
+            n += 1
+            commits = rnd.randint(1, 9)
+            base = {42: 20, 43: 40, 44: 90}[pid] * 3600
+            leads = sorted(rnd.lognormvariate(0, 0.7) * base for _ in range(commits))
+            fix = rnd.random() < {42: 0.12, 43: 0.2, 44: 0.25}[pid]
+            store.db.execute(
+                "INSERT OR REPLACE INTO dora_deploys(key, project_id, project, env, source, sha, ref, finished_at, n_commits, "
+                "lead_median, lead_values, fix_commit, rollback, web_url, title) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (f"{pid}:deployments:{n}", pid, path, "environment production", "deployments",
+                 f"{rnd.getrandbits(40):010x}", "main", t, commits, leads[len(leads) // 2],
+                 json.dumps([round(x) for x in leads]), int(fix), 0, f"https://code.idas.id/{path}/-/jobs/{n}",
+                 "hotfix: perbaiki validasi" if fix else "deploy production"))
+        store.kv_set(f"dora_src:{pid}", json.dumps({"source": "deployments", "label": "environment production",
+                                                    "at": now - 900, "project": path}))
+    for k, (pid, title, days_ago, hours) in enumerate([(42, "Signing timeout di production", 12, 3.5),
+                                                       (43, "Preview dokumen kosong", 34, 20),
+                                                       (42, "Kuota tidak berkurang setelah tanda tangan", 2, None)]):
+        created = now - days_ago * 86400
+        store.db.execute("INSERT OR REPLACE INTO dora_incidents(key, project_id, project, title, created_at, closed_at, web_url) "
+                         "VALUES(?,?,?,?,?,?,?)", (f"{pid}:{900 + k}", pid, dict(PROJECTS)[pid], title, created,
+                                                   created + hours * 3600 if hours else None,
+                                                   f"https://code.idas.id/{dict(PROJECTS)[pid]}/-/issues/{900 + k}"))
+    store.db.commit()
 
 
 def simulate(store, every=20):

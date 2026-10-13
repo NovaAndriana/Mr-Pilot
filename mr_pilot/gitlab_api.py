@@ -112,6 +112,62 @@ class GitLab:
     def get_commit_diff(self, pid, sha):
         return self.get_all(f"/projects/{_pid(pid)}/repository/commits/{sha}/diff")
 
+    # --- read-only: security reports + delivery (DORA) ---------------------
+    def get_project(self, pid):
+        return self.get(f"/projects/{_pid(pid)}")
+
+    def pipelines(self, pid, ref=None, status=None, per_page=10, updated_after=None):
+        """Newest first."""
+        params = {"per_page": per_page, "order_by": "id", "sort": "desc"}
+        if ref:
+            params["ref"] = ref
+        if status:
+            params["status"] = status
+        if updated_after:
+            params["updated_after"] = updated_after
+        return self.get(f"/projects/{_pid(pid)}/pipelines", params)
+
+    def pipeline_jobs(self, pid, pipeline_id):
+        return self.get_all(f"/projects/{_pid(pid)}/pipelines/{pipeline_id}/jobs", {"include_retried": "false"},
+                            max_pages=5)
+
+    def job_artifact(self, pid, job_id, path, max_bytes=30_000_000):
+        """One file from the job's artifacts archive; None if it isn't there (404)."""
+        enc = "/".join(urllib.parse.quote(p, safe="") for p in path.split("/"))
+        r = self._req("GET", f"/projects/{_pid(pid)}/jobs/{job_id}/artifacts/{enc}", stream=True)
+        if r.status_code == 404:
+            r.close()
+            return None
+        r.raise_for_status()
+        body = b""
+        for chunk in r.iter_content(65536):
+            body += chunk
+            if len(body) > max_bytes:
+                r.close()
+                raise ValueError(f"artifact {path} terlalu besar (> {max_bytes // 1_000_000} MB)")
+        return body
+
+    def environments(self, pid):
+        return self.get_all(f"/projects/{_pid(pid)}/environments", max_pages=3)
+
+    def deployments(self, pid, environment, since_iso, max_pages=10):
+        """Successful deployments to `environment` finished after `since_iso`, oldest first."""
+        return self.get_all(f"/projects/{_pid(pid)}/deployments",
+                            {"environment": environment, "status": "success", "order_by": "finished_at",
+                             "sort": "asc", "finished_after": since_iso}, max_pages=max_pages)
+
+    def compare(self, pid, frm, to):
+        return self.get(f"/projects/{_pid(pid)}/repository/compare", {"from": frm, "to": to, "straight": "false"})
+
+    def merged_mrs(self, pid, target_branch, since_iso, max_pages=10):
+        return self.get_all(f"/projects/{_pid(pid)}/merge_requests",
+                            {"state": "merged", "target_branch": target_branch, "updated_after": since_iso,
+                             "order_by": "updated_at", "sort": "asc"}, max_pages=max_pages)
+
+    def issues(self, pid, since_iso, **filters):
+        return self.get_all(f"/projects/{_pid(pid)}/issues", {"created_after": since_iso, "scope": "all",
+                                                             **filters}, max_pages=5)
+
     # --- code-standard reporting -------------------------------------------
     def commit_comment(self, pid, sha, note, path=None, line=None):
         payload = {"note": note}

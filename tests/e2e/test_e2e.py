@@ -139,6 +139,7 @@ def w():
         "TEAMS_MODE": "power_automate", "TEAMS_FLOW_URL": W.teams.url + "/flow?sig=SECRETsig123",
         "CODE_QUALITY_ENABLED": "true", "COMMIT_COMMENTS": "true", "DASHBOARD_PASSWORD": PASSWORD,
         "DASHBOARD_HOST": "127.0.0.1", "DASHBOARD_PORT": str(W.port), "DIGEST_ENABLED": "false",
+        "SECURITY_ENABLED": "false", "DORA_ENABLED": "false",
     }
     with open(os.path.join(W.data, ".env"), "w") as f:
         f.write("# e2e\n" + "".join(f"{k}={v}\n" for k, v in W.env_file.items()))
@@ -1133,3 +1134,153 @@ def test_36_ai_usage_limits(w):
         assert code == 200, body
     b = {p["name"]: p for p in json.loads(http(w, "/api/ai", headers=hdr)[1])["providers"]}["ai-b"]
     assert b["quota"]["level"] == "ok" and b["quota"]["limits"]["daily_requests"] is None
+
+
+# ===================================================== security + DORA
+def _iso(offset):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + offset))
+
+
+LEAKED = "glpat" + "-" + "".join(chr(97 + (i * 5) % 26) for i in range(20))  # fake, built at runtime
+
+
+def _sast(*items):
+    return json.dumps({"scan": {"type": "sast", "analyzer": {"name": "Semgrep"}}, "vulnerabilities": [
+        {"name": n, "description": "d", "severity": sev, "location": {"file": f, "start_line": ln},
+         "identifiers": [{"type": "semgrep_id", "name": r, "value": r}]} for n, sev, f, ln, r in items]}).encode()
+
+
+def _secret(f, ln):
+    return json.dumps({"vulnerabilities": [{"name": "GitLab personal access token", "severity": "Critical",
+                                            "description": f"match {LEAKED}", "raw_source_code_extract": LEAKED,
+                                            "location": {"file": f, "start_line": ln},
+                                            "identifiers": [{"type": "gitleaks_rule_id", "value": "gitlab_pat"}]}]}).encode()
+
+
+def _sec_pipeline(w, pid_, sha, sast, secret, ref="main"):
+    w.gl.branch_pipes.setdefault(ref, []).insert(0, {"id": pid_, "status": "success", "sha": sha,
+                                                     "web_url": f"{w.gl.url}/pipelines/{pid_}"})
+    w.gl.jobs[pid_] = [{"id": pid_ * 10 + 1, "name": "semgrep-sast", "status": "success"},
+                       {"id": pid_ * 10 + 2, "name": "secret_detection", "status": "success"},
+                       {"id": pid_ * 10 + 3, "name": "go-test", "status": "success"}]
+    w.gl.artifacts[(pid_ * 10 + 1, "gl-sast-report.json")] = sast
+    w.gl.artifacts[(pid_ * 10 + 2, "gl-secret-detection-report.json")] = secret
+
+
+def _enable_and_restart(w):
+    envp = os.path.join(w.data, ".env")
+    with open(envp) as f:
+        txt = f.read().replace("SECURITY_ENABLED=false", "SECURITY_ENABLED=true").replace("DORA_ENABLED=false",
+                                                                                          "DORA_ENABLED=true")
+    with open(envp, "w") as f:
+        f.write(txt)
+    w.app.signal(signal.SIGTERM)
+    assert w.app.wait_exit(40) == 0
+    n = len(w.tg.sent)
+    w.app.start()
+    wait(lambda: w.tg.find("MR Pilot aktif", n), 60, "start ulang")
+    code, loc, cookie = login(w, PASSWORD)
+    assert code in (302, 303) and cookie, (code, loc)
+    return {"Cookie": cookie.split(";")[0], "X-MRPilot": "1"}
+
+
+def test_37_security_scan_alerts_and_merge_confirmation(w):
+    _sec_pipeline(w, 7001, "e1" * 20, _sast(("SQL injection", "High", "internal/q/repo.go", 10, "gosec.G202-1"),
+                                            ("Weak hash", "Medium", "internal/q/hash.go", 4, "gosec.G401-1")),
+                  json.dumps({"vulnerabilities": []}).encode())
+    w.security_hdr = hdr = _enable_and_restart(w)
+    # separate pages + shared assets
+    for path, needle in (("/security", "Keamanan"), ("/dora", "Performa delivery"), ("/static/app.css", ".metric"),
+                         ("/static/common.js", "function lineChart")):
+        code, body, headers = http(w, path, headers=hdr)
+        assert code == 200 and needle.encode() in body, path
+    assert "text/css" in http(w, "/static/app.css", headers=hdr)[2]["Content-Type"]
+    anon = urllib.request.build_opener(NoRedirect)
+    assert http(w, "/security", opener=anon)[0] == 302 and http(w, "/api/security", opener=anon)[0] == 401
+    assert http(w, "/api/security/sync", "POST", {}, {"Cookie": hdr["Cookie"]})[0] == 403, "tanpa header CSRF"
+    # first scan = baseline (no alert)
+    n = len(w.tg.sent)
+    assert http(w, "/api/security/sync", "POST", {}, hdr)[0] == 202
+    d = wait(lambda: (lambda x: x if x["kpi"]["open"] == 2 and x["projects"] and x["projects"][0]["state"] == "ok"
+                      else None)(json.loads(http(w, "/api/security", headers=hdr)[1])), 60, "scan keamanan pertama")
+    assert d["projects"][0]["state"] == "ok" and d["projects"][0]["project"] == "idas/idas-repo-be"
+    assert d["kpi"]["high"] == 1 and "Jobs/SAST.gitlab-ci.yml" in d["ci_snippet"]
+    time.sleep(2)
+    assert not w.tg.find("Temuan keamanan baru", n), "scan pertama tidak memicu notif"
+    # new pipeline: SQL injection fixed, a token leaked
+    _sec_pipeline(w, 7002, "e2" * 20, _sast(("Weak hash", "Medium", "internal/q/hash.go", 6, "gosec.G401-1")),
+                  _secret("deploy/k8s/cm.yaml", 3))
+    assert http(w, "/api/security/sync", "POST", {}, hdr)[0] == 202
+    alert = wait(lambda: w.tg.find("Temuan keamanan baru", n), 60, "notif temuan baru")
+    t = w.tg.messages[alert]["text"]
+    assert "GitLab personal access token" in t and "deploy/k8s/cm.yaml:3" in t and LEAKED not in t
+    d = wait(lambda: (lambda x: x if x["kpi"]["fixed"] == 1 else None)(json.loads(http(w, "/api/security", headers=hdr)[1])),
+             20, "temuan yang beres")
+    assert d["kpi"]["open"] == 2 and d["kpi"]["secrets"] == 1
+    assert LEAKED not in json.dumps(d) and LEAKED not in json.dumps(w.tg.texts())
+    n = len(w.tg.sent)
+    w.tg.say("/keamanan")
+    k = wait(lambda: w.tg.find("Keamanan (temuan terbuka)", n), 15, "/keamanan")
+    assert "idas/idas-repo-be" in w.tg.messages[k]["text"] and "1 secret" in w.tg.messages[k]["text"]
+    # an MR that adds a new high finding -> alert + merge needs confirmation
+    w.verdicts["feat: export laporan"] = {"verdict": "APPROVE"}
+    w.gl.add_mr(610, "feat: export laporan", "f6" * 20, files={"internal/q/export.go": GO_OK})
+    n = len(w.tg.sent)
+    cek(w)
+    mid = card(w, 610, n)
+    w.gl.pipelines[(7, 610)] = [{"id": 7610, "status": "success", "sha": "f6" * 20, "web_url": f"{w.gl.url}/pipelines/7610"}]
+    w.gl.jobs[7610] = [{"id": 76101, "name": "semgrep-sast", "status": "success"}]
+    w.gl.artifacts[(76101, "gl-sast-report.json")] = _sast(
+        ("Weak hash", "Medium", "internal/q/hash.go", 6, "gosec.G401-1"),
+        ("Path traversal", "High", "internal/q/export.go", 2, "gosec.G304-1"))
+    assert http(w, "/api/security/sync", "POST", {}, hdr)[0] == 202
+    mr_alert = wait(lambda: w.tg.find("membawa temuan keamanan baru", n), 60, "notif MR")
+    assert "!610" in w.tg.messages[mr_alert]["text"] and "Path traversal" in w.tg.messages[mr_alert]["text"]
+    assert "Weak hash" not in w.tg.messages[mr_alert]["text"], "temuan lama bukan dari MR ini"
+    d = json.loads(http(w, "/api/security", headers=hdr)[1])
+    assert [m["iid"] for m in d["mrs"]] == [610] and d["mrs"][0]["serious"] == 1
+    n = len(w.tg.sent)
+    w.tg.press(mid, "m|7|610")
+    c = wait(lambda: w.tg.find("Yakin tetap merge?", n), 20, "konfirmasi merge")
+    assert "Keamanan" in w.tg.messages[c]["text"] and "1 high" in w.tg.messages[c]["text"]
+    assert not any(k == (7, 610) for k, _ in w.gl.merges)
+    w.tg.press(c, "mf|7|610")
+    wait(lambda: any(k == (7, 610) for k, _ in w.gl.merges), 30, "merge setelah konfirmasi")
+
+
+def test_38_dora_metrics(w):
+    hdr = w.security_hdr
+    D = 86400
+    w.gl.environments = [{"name": "staging", "tier": "staging"}, {"name": "production", "tier": "production"}]
+    shas = [f"d{k}" * 20 for k in range(6)]
+    times = [-20 * D, -15 * D, -10 * D, -10 * D + 4 * 3600, -5 * D, -1 * D]
+
+    def dep(k):
+        return {"id": 800 + k, "sha": shas[k], "ref": "main", "status": "success", "finished_at": _iso(times[k]),
+                "environment": {"name": "production"}, "deployable": {"name": "deploy-prod", "web_url": f"{w.gl.url}/jobs/{800 + k}"}}
+    w.gl.deployments = [dep(k) for k in range(6)]
+    for k in range(1, 6):
+        title = "hotfix: kuota null" if k == 3 else f"feat: fitur {k}"
+        w.gl.compares[(shas[k - 1], shas[k])] = [
+            {"title": title, "committed_date": _iso(times[k] - (2 * 3600 if k == 3 else 2 * D)), "parent_ids": ["p"]}]
+    w.gl.issues = [{"iid": 31, "title": "Signing down", "issue_type": "incident", "labels": [],
+                    "created_at": _iso(times[4] + 3600), "closed_at": _iso(times[4] + 3 * 3600),
+                    "web_url": f"{w.gl.url}/issues/31"}]
+    assert http(w, "/api/dora/sync", "POST", {}, hdr)[0] == 202
+    d = wait(lambda: (lambda x: x if x["current"]["deployments"] == 6 else None)(
+        json.loads(http(w, "/api/dora?days=30", headers=hdr)[1])), 60, "sinkron DORA")
+    assert len(d["incidents"]) == 1, "incident disinkronkan sebelum deployment"
+    m = d["current"]
+    assert m["failed"] == 2, "deployment sebelum hotfix + deployment sebelum incident"
+    assert abs(m["cfr"] - 2 / 6) < 1e-9 and m["levels"]["cfr"] == "low"
+    assert m["levels"]["deploy_freq"] == "high" and m["lead_time"] > 0
+    assert d["sources"][0]["label"] == "environment production" and d["projects"][0]["deployments"] == 6
+    assert d["deployments"][0]["sha"] == shas[5][:8]
+    n = len(w.tg.sent)
+    w.tg.say("/dora")
+    k = wait(lambda: w.tg.find("DORA 30 hari", n), 15, "/dora")
+    t = w.tg.messages[k]["text"]
+    assert "6 deployment" in t and "33%" in t and "Lead time" in t
+    # the main page links to both dashboards
+    body = http(w, "/", headers=hdr)[1]
+    assert b'href="/security"' in body and b'href="/dora"' in body
