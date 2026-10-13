@@ -86,6 +86,21 @@ class GitLab:
         r.encoding = r.encoding or "utf-8"
         return r.text
 
+    def mr_pipelines(self, pid, iid):
+        """Pipelines of an MR, newest first."""
+        return self.get(f"/projects/{_pid(pid)}/merge_requests/{iid}/pipelines", {"per_page": 5})
+
+    def failed_jobs(self, pid, pipeline_id):
+        return self.get(f"/projects/{_pid(pid)}/pipelines/{pipeline_id}/jobs",
+                        {"scope[]": "failed", "per_page": 20})
+
+    def job_trace(self, pid, job_id, tail=20000):
+        """Last `tail` characters of a job log."""
+        r = self._req("GET", f"/projects/{_pid(pid)}/jobs/{job_id}/trace")
+        r.raise_for_status()
+        r.encoding = r.encoding or "utf-8"
+        return r.text[-tail:]
+
     def get_commits(self, pid, iid):
         """Newest first (GitLab order), all pages."""
         return self.get_all(f"/projects/{_pid(pid)}/merge_requests/{iid}/commits")

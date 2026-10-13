@@ -35,12 +35,31 @@ review:
     context_chars: 60000          # isi lengkap file yang berubah dikirim sebagai konteks (0 = mati)
     standards_chars: 8000         # dokumen standar tim (standards/*.md) ikut dipakai saat review
     verify: true                  # temuan blocker/major dicek ulang AI kedua; yang tidak terbukti dibuang
+    post_findings: manual         # manual = tombol "💬 Kirim saran ke MR" di kartu | auto = blocker/major langsung diposting | off
     language: Indonesia
     extra_rules: |
       - Perubahan bentuk response API (array jadi object, field null, dsb.) selalu dicatat sebagai breaking change.
       - Query repository tanpa filter dianggap blocker.
   ignore_files: ["*.lock", "go.sum", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
                  "vendor/*", "*.min.js", "*.snap"]
+
+pipeline:
+  enabled: true                   # pipeline MR yang Anda review gagal -> AI jelaskan penyebab & saran di Telegram
+  comment_on_mr: true             # penjelasan juga diposting sebagai komentar di MR (atas nama Anda)
+  log_chars: 20000                # bagian akhir log job yang dibaca
+
+digest:
+  enabled: ${DIGEST_ENABLED:-true}
+  time: "${DIGEST_TIME:-08:30}"   # ringkasan harian di Telegram (zona waktu TZ, default Asia/Jakarta); /digest kapan saja
+  weekdays_only: true
+
+reminders:
+  enabled: true                   # MR yang lama menunggu keputusan Anda diingatkan (dengan tombol Merge/Tolak)
+  after_hours: 24                 # mulai diingatkan setelah menunggu sekian jam
+  repeat_hours: 24
+  active_from: "08:00"            # pengingat hanya di jam kerja
+  active_until: "20:00"
+  weekdays_only: true
 
 merge:
   require_pipeline_success: true  # tolak merge jika pipeline belum hijau

@@ -5,14 +5,14 @@ import sqlite3
 import threading
 import time
 
-COLUMNS = ["project_id", "iid", "sha", "title", "web_url", "status", "review",
-           "tg_msg_id", "tg_text", "first_seen", "attempts", "updated_at",
-           "project", "author", "author_username", "source_branch", "target_branch",
-           "verdict", "pipeline", "quality", "decided_at", "mr_created_at"]
+_BASE_COLS = ["project_id", "iid", "sha", "title", "web_url", "status", "review",
+              "tg_msg_id", "tg_text", "first_seen", "attempts", "updated_at"]
 
 _EXTRA_COLS = {"project": "TEXT", "author": "TEXT", "author_username": "TEXT",
                "source_branch": "TEXT", "target_branch": "TEXT", "verdict": "TEXT",
-               "pipeline": "TEXT", "quality": "TEXT", "decided_at": "REAL", "mr_created_at": "TEXT"}
+               "pipeline": "TEXT", "quality": "TEXT", "decided_at": "REAL", "mr_created_at": "TEXT",
+               "notified_at": "REAL"}
+COLUMNS = _BASE_COLS + list(_EXTRA_COLS)  # one source of truth: new columns are added to _EXTRA_COLS only
 
 
 class Store:

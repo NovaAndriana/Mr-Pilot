@@ -93,6 +93,16 @@ python -m mr_pilot --dry-run    # cek MR tanpa kirim/merge apa pun
 
 ---
 
+## 1d. Fitur harian
+
+**Pipeline gagal dijelaskan.** Saat pipeline MR yang Anda review merah, MR Pilot membaca log job yang gagal dan mengirim ke Telegram: kategori (test, build, lint, infra, ...), penyebab, lokasi (`file:baris` / nama test), saran perbaikan, dan baris error penting dari log. Token di log disensor. Penjelasan juga diposting di MR untuk developer (`pipeline.comment_on_mr`). Kalau Anda tap Merge saat pipeline masih jalan, MR Pilot mengabari begitu pipeline hijau. Provider AI-nya bisa dipilih sendiri di dashboard > AI > *Jelaskan pipeline gagal*; tanpa AI tetap dikirim baris error dari log.
+
+**Ringkasan pagi.** Setiap hari kerja pukul 08:30 (`digest.time`, `DIGEST_TIME`): MR yang menunggu Anda (paling lama di atas, lengkap verdict & umur), pipeline merah, MR yang menunggu bot, dan hasil 24 jam terakhir. Ketik `/digest` kapan saja.
+
+**Pengingat.** MR yang menunggu keputusan lebih dari 24 jam diingatkan sekali sehari di jam kerja (08:00–20:00), lengkap dengan tombol Merge/Tolak (`reminders.*`).
+
+**Saran yang bisa langsung di-Apply.** Tombol **💬 Kirim saran ke MR** di kartu memposting temuan AI sebagai komentar di baris kodenya. Kalau AI memberi kode pengganti, komentar berisi blok *suggestion* GitLab: developer tinggal klik **Apply suggestion**. Temuan yang tidak terbukti tidak dikirim, dan saran yang sama tidak diposting dua kali. `review.llm.post_findings: auto` = temuan blocker/major langsung diposting tanpa tombol.
+
 ## 2. AI: provider, fallback, dan per tugas
 
 ### Cara AI mereview (lebih teliti, lebih sedikit temuan palsu)
