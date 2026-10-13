@@ -3,6 +3,7 @@ line, the comment carries a GitLab ```suggestion``` block, so the developer can 
 import hashlib
 import logging
 
+from . import voice
 from .util import short_error
 
 log = logging.getLogger("mr_pilot.suggest")
@@ -20,23 +21,9 @@ def _fence(code):
     return "````" if "```" in code else "```"
 
 
-def comment_body(f, inline=True):
-    parts = [f"**{SEV.get(f.get('severity'), 'Temuan')} · {f.get('title') or 'Temuan review'}**"]
-    if f.get("detail"):
-        parts.append(f["detail"])
-    if f.get("suggestion"):
-        parts.append(f"💡 {f['suggestion']}")
-    code = (f.get("fix_code") or "").rstrip("\n")
-    if code and _norm(code) != _norm(f.get("evidence")):
-        fence = _fence(code)
-        if inline:  # GitLab replaces the commented line with this block -> "Apply suggestion"
-            parts.append(f"{fence}suggestion:-0+0\n{code}\n{fence}")
-        else:
-            parts.append(f"Saran kode untuk `{f['file']}:{f['line']}`:\n{fence}\n{code}\n{fence}")
-    elif not inline:
-        parts.append(f"`{f['file']}:{f['line']}`")
-    parts.append("<sub>Saran review</sub>")
-    return "\n\n".join(parts)
+def comment_body(f, inline=True, footer=""):
+    """Written like a teammate's review comment; carries a ```suggestion``` block when inline + fix code."""
+    return voice.finding_comment(f, inline=inline, footer=footer)
 
 
 def _norm(s):

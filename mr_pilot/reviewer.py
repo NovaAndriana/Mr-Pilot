@@ -145,6 +145,8 @@ def normalize(data, source):
 
 
 # --------------------------------------------------------------- LLM review
+from .voice import VOICE_RULES  # noqa: E402
+
 SYSTEM_PROMPT = """Kamu Staff Engineer yang mereview merge request untuk Tech Lead. Tujuanmu: menemukan masalah
 NYATA yang akan merusak produksi, keamanan, atau kontrak API, bukan memberi komentar sebanyak-banyaknya.
 
@@ -181,6 +183,10 @@ Aturan keras:
 - verdict: REQUEST_CHANGES jika ada blocker; NEEDS_ATTENTION jika ada major atau ada pertanyaan penting;
   APPROVE jika hanya minor/tidak ada temuan.
 - Tulis dalam bahasa @@LANGUAGE@@, singkat dan langsung ke inti.
+- "detail" dan "suggestion" langsung dipasang sebagai komentar di baris kode GitLab, jadi:
+  detail = apa yang salah di baris itu + skenario konkret kapan rusak (input/kondisi apa, akibatnya apa);
+  suggestion = cara memperbaikinya, sebut fungsi/variabel yang dipakai.
+@@VOICE@@
 @@EXTRA_RULES@@
 @@STANDARDS@@
 Jawab HANYA dengan JSON valid (tanpa teks lain) dengan skema:
@@ -198,7 +204,7 @@ Jawab HANYA dengan JSON valid (tanpa teks lain) dengan skema:
                 "file": "path/file.go", "line": 123,
                 "title": "judul singkat",
                 "evidence": "baris kode persis",
-                "detail": "kenapa ini masalah + dampaknya",
+                "detail": "apa yang salah + skenario kapan rusak dan dampaknya",
                 "suggestion": "perbaikan konkret dalam kalimat",
                 "fix_code": "kode pengganti untuk baris `line` SAJA (persis, dengan indentasi aslinya, boleh beberapa baris). Isi hanya jika perbaikannya cukup dengan mengganti baris itu; selain itu kosongkan",
                 "confidence": "high|medium"}]}"""
@@ -213,7 +219,7 @@ def build_system_prompt(language, extra_rules, standards=""):
     # str.replace, bukan .format: extra_rules/standar buatan user boleh berisi { } tanpa merusak prompt
     std = (f"\nStandar tim (pelanggaran dilaporkan dengan category \"standard\"):\n{standards}\n"
            if standards else "")
-    return (SYSTEM_PROMPT.replace("@@LANGUAGE@@", str(language or "Indonesia"))
+    return (SYSTEM_PROMPT.replace("@@VOICE@@", VOICE_RULES).replace("@@LANGUAGE@@", str(language or "Indonesia"))
             .replace("@@EXTRA_RULES@@", str(extra_rules or "")).replace("@@STANDARDS@@", std))
 
 
@@ -469,7 +475,8 @@ class Reviewer:
             rv = normalize(extract_json(raw), "llm")
             rv["provider"] = provider
             verify_findings(rv["findings"], "\n".join(d.get("diff") or "" for d in diffs), files_raw)
-            if llm.get("verify", True) and any(f["severity"] in ("blocker", "major") for f in rv["findings"]):
+            if llm.get("verify", True) and any(f["severity"] in ("blocker", "major") for f in rv["findings"]) \
+                    and not self._economy():
                 self._second_opinion(rv, diff_text, files)
             self._settle_verdict(rv)
             if code_change_size(diffs) >= 20 and not has_test_change(diffs):
@@ -480,6 +487,12 @@ class Reviewer:
         except Exception as e:
             log.warning("LLM review gagal: %s", short_error(e))
             return empty_review("llm", f"Review AI gagal: {short_error(e)}")
+
+    def _economy(self):
+        try:
+            return bool(self.ai.economy("review"))
+        except Exception:
+            return False
 
     def _second_opinion(self, rv, diff_text, files):
         """Skeptical second pass over blocker/major findings: drop false positives, fix severity."""

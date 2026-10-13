@@ -69,10 +69,15 @@ def annotate_diff(diff):
     return "\n".join(out)
 
 
-def violation(rule, severity, message, path="", line=None, source="rule", snippet="", stack=""):
-    return {"rule": rule, "severity": severity if severity in SEVERITIES else "warning",
-            "message": message, "path": path, "line": line, "source": source,
-            "snippet": (snippet or "").strip()[:200], "stack": stack}
+def violation(rule, severity, message, path="", line=None, source="rule", snippet="", stack="", why="", fix=""):
+    v = {"rule": rule, "severity": severity if severity in SEVERITIES else "warning",
+         "message": message, "path": path, "line": line, "source": source,
+         "snippet": (snippet or "").strip()[:200], "stack": stack}
+    if why:
+        v["why"] = str(why).strip()
+    if fix:
+        v["fix"] = str(fix).strip()
+    return v
 
 
 class Standards:
@@ -129,6 +134,7 @@ class Standards:
             self.rules.append({"id": r.get("id") or r["pattern"][:30], "rx": rx, "stacks": stacks,
                                "severity": str(r.get("severity", "warning")).lower(),
                                "message": r.get("message") or r.get("id"),
+                               "why": r.get("why") or "", "fix": r.get("fix") or "",
                                "paths": r.get("paths") or [], "exclude": r.get("exclude_paths") or []})
 
     # -------------------------------------------------------------- stacks
@@ -168,7 +174,7 @@ class Standards:
             for r in rules:
                 if r["rx"].search(text):
                     out.append(violation(r["id"], r["severity"], r["message"], path, line_no,
-                                         "rule", text, sid or ""))
+                                         "rule", text, sid or "", why=r["why"], fix=r["fix"]))
         return out
 
     def check_diffs(self, diffs, ignore=()):
@@ -186,10 +192,10 @@ class Standards:
             hint = suggest_title(title, branch)
             if hint and not re.search(pat, hint):
                 hint = None
-            msg = "Judul MR belum mengikuti format `tipe(TIKET): deskripsi`, mis. `feat(IDAS-123): tampilkan kuota`."
-            if hint:
-                msg += f" Saran: `{hint}`"
-            return [violation("mr-title-convention", "warning", msg, source="convention", snippet=title)]
+            msg = "Judul MR-nya belum ikut format `tipe(TIKET): deskripsi`."
+            msg += f" Bisa diganti jadi `{hint}`." if hint else " Contohnya `feat(IDAS-123): tampilkan kuota`."
+            return [violation("mr-title-convention", "warning", msg, source="convention", snippet=title,
+                              why="Format ini dipakai untuk changelog dan supaya MR gampang dicari dari nomor tiketnya.")]
         return []
 
     def check_commit_message(self, message):
@@ -200,7 +206,7 @@ class Standards:
             return []
         if not re.search(pat, first):
             return [violation("commit-message-convention", conv.get("commit_message_severity", "info"),
-                              "Pesan commit tidak sesuai konvensi. Contoh: fix(IDAS-123): validasi phases kosong",
+                              "Pesan commit ini belum ikut konvensi tim, contohnya `fix(IDAS-123): validasi phases kosong`.",
                               source="convention", snippet=first)]
         return []
 
@@ -228,7 +234,7 @@ class Standards:
                 labels[_norm(m.group(2))] = m.group(2).strip()
         if not found:
             return [violation("pr-checklist-missing", "info",
-                              "Deskripsi MR belum memuat checklist (kotak - [ ]). Pakai template MR tim.",
+                              "Deskripsi MR-nya belum ada checklist (`- [ ]`), boleh pakai template MR tim.",
                               source="convention")]
         if mode == "present":
             return []
@@ -237,7 +243,7 @@ class Standards:
             if not unchecked:
                 return []
             return [violation("pr-checklist-unchecked", "info",
-                              f"{len(unchecked)} item checklist belum dicentang: " + "; ".join(unchecked[:5]),
+                              f"Masih ada {len(unchecked)} item checklist yang belum dicentang: " + "; ".join(unchecked[:5]),
                               source="convention")]
         expected = self.checklist_items()
         if not expected:
@@ -247,11 +253,11 @@ class Standards:
         out = []
         if unchecked:
             out.append(violation("pr-checklist-unchecked", "info",
-                                 f"{len(unchecked)} item checklist belum dicentang: " + "; ".join(unchecked[:5]),
+                                 f"Masih ada {len(unchecked)} item checklist yang belum dicentang: " + "; ".join(unchecked[:5]),
                                  source="convention"))
         if missing:
             out.append(violation("pr-checklist-incomplete", "info",
-                                 f"{len(missing)} item checklist tidak ada: " + "; ".join(missing[:5]),
+                                 f"Ada {len(missing)} item checklist dari template yang belum dimasukkan: " + "; ".join(missing[:5]),
                                  source="convention"))
         return out
 

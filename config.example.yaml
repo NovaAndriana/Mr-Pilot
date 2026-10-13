@@ -139,7 +139,7 @@ code_quality:
     status_name: code-standard
     status_fail_on: none          # none | error | warning. "error" = status merah jika ada error
                                   # (hati-hati: bisa ikut menahan merge jika "pipeline must succeed" aktif)
-    comment_footer: "Pengecekan standar kode otomatis"
+    comment_footer: ""            # teks kecil di bawah komentar GitLab; kosong = tanpa footer
 
 dashboard:
   enabled: true

@@ -51,6 +51,10 @@ class Store:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, provider TEXT, task TEXT,
                 ok INTEGER, ms INTEGER, error TEXT);
         """)
+        have_ai = {r[1] for r in self.db.execute("PRAGMA table_info(ai_calls)")}
+        for col in ("tokens_in", "tokens_out"):
+            if col not in have_ai:
+                self.db.execute(f"ALTER TABLE ai_calls ADD COLUMN {col} INTEGER DEFAULT 0")
         have = {r[1] for r in self.db.execute("PRAGMA table_info(mrs)")}
         for col, typ in _EXTRA_COLS.items():
             if col not in have:
@@ -161,17 +165,19 @@ class Store:
         return r[0] or 0
 
     # ------------------------------------------------------------- ai usage
-    def add_ai_call(self, provider, task, ok, ms, error=""):
+    def add_ai_call(self, provider, task, ok, ms, error="", tokens_in=0, tokens_out=0):
         with self.lock:
-            self.db.execute("INSERT INTO ai_calls(ts,provider,task,ok,ms,error) VALUES(?,?,?,?,?,?)",
-                            (time.time(), provider, task, int(bool(ok)), ms, (error or "")[:300]))
+            self.db.execute("INSERT INTO ai_calls(ts,provider,task,ok,ms,error,tokens_in,tokens_out) "
+                            "VALUES(?,?,?,?,?,?,?,?)", (time.time(), provider, task, int(bool(ok)), ms,
+                                                        (error or "")[:300], int(tokens_in), int(tokens_out)))
             self.db.commit()
 
     def ai_stats(self, days=7):
         since = time.time() - days * 86400
         with self.lock:
             rows = self.db.execute(
-                "SELECT provider, COUNT(*) n, SUM(ok) ok, AVG(CASE WHEN ok=1 THEN ms END) avg_ms, MAX(ts) last_ts "
+                "SELECT provider, COUNT(*) n, SUM(ok) ok, AVG(CASE WHEN ok=1 THEN ms END) avg_ms, MAX(ts) last_ts, "
+                "COALESCE(SUM(tokens_in), 0) tokens_in, COALESCE(SUM(tokens_out), 0) tokens_out "
                 "FROM ai_calls WHERE ts>=? GROUP BY provider", (since,)).fetchall()
             errs = self.db.execute("SELECT provider, task, ts, error FROM ai_calls WHERE ok=0 AND ts>=? "
                                    "ORDER BY ts DESC LIMIT 15", (since,)).fetchall()

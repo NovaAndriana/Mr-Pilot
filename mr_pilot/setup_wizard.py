@@ -87,7 +87,31 @@ _MIGRATIONS = [
     (re.compile(r"^(\s*)# bot_then_llm = tunggu komentar bot; kalau tidak muncul dalam wait_minutes, pakai API AI\s*$",
                 re.M),
      r"\1# bot_then_llm = pakai komentar bot kalau sudah ada; kalau belum, langsung review pakai API AI"),
+    (re.compile(r'^(\s*)comment_footer:\s*"Pengecekan standar kode otomatis"\s*$', re.M),
+     r'\1comment_footer: ""            # teks kecil di bawah komentar GitLab; kosong = tanpa footer'),
 ]
+
+# sha256 of standards/rules.yaml files we shipped before; an untouched copy in the data folder is upgraded.
+_OLD_RULES_SHA = {"26a24536fc3cd5eeffa10937ee05caccb790091c89211eee6d2853dfb44ca930"}
+
+
+def migrate_rules(std_dir):
+    """Replace an unmodified old rules.yaml with the bundled one (keeps rules.yaml.bak). True if upgraded."""
+    import hashlib
+    dst, src = os.path.join(std_dir, "rules.yaml"), os.path.join(PKG_ROOT, "standards", "rules.yaml")
+    if not os.path.exists(dst) or not os.path.exists(src) or os.path.abspath(dst) == os.path.abspath(src):
+        return False
+    try:
+        with open(dst, "rb") as f:
+            old = f.read()
+        if hashlib.sha256(old.replace(b"\r\n", b"\n")).hexdigest() not in _OLD_RULES_SHA:
+            return False  # edited by the user: leave it alone
+        shutil.copy(dst, dst + ".bak")
+        shutil.copy(src, dst + ".tmp")
+        os.replace(dst + ".tmp", dst)
+        return True
+    except OSError:
+        return False
 
 
 def migrate_config(path):
@@ -129,6 +153,8 @@ def bootstrap_data_dir(data_dir):
     if not os.path.exists(std) and os.path.isdir(src_std) and os.path.abspath(src_std) != os.path.abspath(std):
         shutil.copytree(src_std, std)
         created.append("standards/")
+    elif migrate_rules(std):
+        created.append("standards/rules.yaml (diperbarui, salinan lama: rules.yaml.bak)")
     if os.path.exists("/.dockerenv") or os.environ.get("MRP_IN_DOCKER") == "1":
         os.makedirs(os.path.join(data_dir, "home"), exist_ok=True)  # $HOME for Claude Code in the container
     return created
