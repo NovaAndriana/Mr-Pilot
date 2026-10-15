@@ -68,12 +68,30 @@ def detail_lines(mr, review):
     return lines
 
 
+def thread_lines(th):
+    """Follow-up of the comments MR Pilot left in GitLab."""
+    if not th or not (th.get("fixed") or th.get("open") or th.get("fixed_total")):
+        return []
+    out = []
+    if th.get("fixed"):
+        out.append(f"✅ <b>{len(th['fixed'])} catatan sudah diperbaiki</b> di commit ini (thread di GitLab ditutup):")
+        out += [f"   • {e(str(t)[:120])}" for t in th["fixed"][:5]]
+    if th.get("open"):
+        out.append(f"💬 {th['open']} catatan di GitLab masih menunggu perbaikan.")
+    elif th.get("fixed_total") and not th.get("fixed"):
+        out.append("✅ Semua catatan di GitLab sudah diperbaiki.")
+    return out
+
+
 def quality_lines(q):
     if not q:
         return []
+    th = thread_lines(q.get("threads"))
+    if "counts" not in q:  # code-standard check off: only the follow-up of review comments
+        return ([""] + th) if th else []
     c = q.get("counts") or {}
     if not q.get("total"):
-        return ["", "<b>📏 Standar kode:</b> ✅ sesuai standar"]
+        return ["", "<b>📏 Standar kode:</b> ✅ sesuai standar"] + th
     lines = ["", f"<b>📏 Standar kode:</b> ❌ {c.get('error', 0)} error · ⚠️ {c.get('warning', 0)} warning"
                  f" · ℹ️ {c.get('info', 0)} info"]
     for v in q.get("top") or []:
@@ -82,9 +100,10 @@ def quality_lines(q):
         lines.append(f"{Q_ICON.get(v['severity'], '•')} <code>{e(v['rule'])}</code>{loc}{src}")
         lines.append(f"   {e((v.get('message') or '')[:160])}")
     if q.get("total", 0) > len(q.get("top") or []):
-        lines.append(f"   …{q['total'] - len(q['top'])} lainnya (lihat ringkasan di MR / dashboard)")
+        lines.append(f"   …{q['total'] - len(q['top'])} lainnya (lihat dashboard)")
     if q.get("posted"):
-        lines.append(f"<i>{q['posted']} warning sudah diposting ke commit/MR di GitLab.</i>")
+        lines.append(f"<i>{q['posted']} komentar baru di GitLab (hanya error dan risiko). Warning lain cukup di sini.</i>")
+    lines += th
     for err in q.get("rule_errors") or []:
         lines.append(f"<i>⚙️ {e(err)}</i>")
     return lines

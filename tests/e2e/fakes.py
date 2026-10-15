@@ -202,6 +202,14 @@ class FakeGitLab(Server):
             self.notes.setdefault((pid, iid), []).insert(0, n)
             return n
 
+    def reply_as(self, did, username, text):
+        """A developer answers in one of the threads."""
+        with self.lock:
+            for _, b in self.discussions:
+                if b.get("id") == did:
+                    b["notes"].append({"id": len(b["notes"]) + 1, "body": text, "resolvable": True,
+                                       "resolved": b["resolved"], "author": {"username": username}})
+
     def notes_by_me(self, iid, pid=7):
         return [n for n in self.notes.get((pid, iid), []) if n["author"]["username"] == self.user["username"]]
 
@@ -278,13 +286,36 @@ class _GitLabHandler(_Base):
                         hp = mr.get("head_pipeline")
                         pls = [{"id": 90000 + key[1], "sha": mr["sha"], **hp}] if hp else []
                     return self._json(200, pls)
+                if sub == "/discussions" and method == "GET":
+                    return self._paged([{"id": b.get("id"), "notes": b.get("notes", [])} for k2, b in f.discussions
+                                        if k2 == key], q)
                 if sub == "/discussions" and method == "POST":
                     pos = body.get("position")
                     if pos:  # like GitLab: an inline comment must sit on a line of the diff
                         if pos.get("new_line") not in f.diff_lines(key, pos.get("new_path")):
                             return self._json(400, {"message": "400 Bad request - Note {:line_code=>[\"can't be blank\"]}"})
                     f.discussions.append((key, body))
-                    return self._json(201, {"id": "d1", "notes": [{"body": body["body"]}]})
+                    did = f"disc{len(f.discussions)}"
+                    body["id"] = did
+                    body["notes"] = [{"id": f.note_seq + len(f.discussions), "body": body["body"], "resolvable": True,
+                                      "resolved": False, "author": {"username": f.user["username"]}}]
+                    body["resolved"] = False
+                    return self._json(201, {"id": did, "notes": body["notes"]})
+                mm = re.match(r"^/discussions/([\w-]+)(/notes)?$", sub)
+                if mm:
+                    d = next((b for k2, b in f.discussions if k2 == key and b.get("id") == mm.group(1)), None)
+                    if d is None:
+                        return self._json(404, {"message": "404 Discussion Not Found"})
+                    if mm.group(2) and method == "POST":
+                        n = {"id": len(d["notes"]) + 1, "body": body["body"], "resolvable": True,
+                             "resolved": d["resolved"], "author": {"username": f.user["username"]}}
+                        d["notes"].append(n)
+                        return self._json(201, n)
+                    if method == "PUT":
+                        d["resolved"] = bool(body.get("resolved"))
+                    for n in d["notes"]:
+                        n["resolved"] = d["resolved"]
+                    return self._json(200, {"id": d["id"], "notes": d["notes"]})
                 if sub == "/approve" and method == "POST":
                     f.approvals.append((key, body.get("sha")))
                     return self._json(201, {"approved": True})

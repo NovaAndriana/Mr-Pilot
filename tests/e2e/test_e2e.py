@@ -69,9 +69,13 @@ def ai_router(review_for):
         system = payload["messages"][0]["content"]
         user = payload["messages"][1]["content"]
         if "STANDAR TIM" in system:
-            return {"violations": [{"rule": "Handler akses repo langsung", "severity": "warning",
-                                    "file": "internal/x/usecase.go", "line": 2, "message": "Pindahkan ke usecase",
-                                    "confidence": "high"}]}
+            vs = [{"rule": "Penamaan", "severity": "warning", "file": "internal/x/usecase.go", "line": 3,
+                   "message": "Pindahkan ke usecase", "confidence": "high"}]  # style: must not be posted
+            if "data, _ := repo.Find" in user:
+                vs.append({"rule": "Error handling", "severity": "risk", "file": "internal/x/usecase.go", "line": 2,
+                           "message": "Sekarang belum error, tapi saat repo.Find gagal data jadi nil dan handler "
+                                      "panic di baris berikutnya. Tangani err-nya dulu.", "confidence": "high"})
+            return {"violations": vs}
         m = re.search(r"Judul MR: (.*)", user)
         return review_for((m.group(1) if m else "").strip())
     return reply
@@ -243,25 +247,25 @@ def test_02_new_mr_card_review_quality(w):
     assert set(w.tg.buttons(mid)) == {"✅ Merge", "❌ Tolak", "🗑️ Merge + hapus branch", "🔁 Review ulang", "🔗 Buka MR"}
     # AI: provider A broken -> fell back to B
     assert w.ai_a.calls and w.ai_b.calls
-    # code standard warnings on the commit (file + line), summary note, commit status
-    lines = sorted((c[1].get("path"), c[1].get("line")) for c in w.gl.commit_comments if c[1].get("line"))
-    assert ("internal/x/usecase.go", 2) in lines and ("internal/x/usecase.go", 3) in lines
-    notes = [n["body"] for n in w.gl.notes_by_me(375)]
-    summary = next(b for b in notes if "Catatan review standar kode" in b)
-    assert "Perlu diperbaiki sebelum merge" in summary and "`internal/x/usecase.go:" in summary
-    for body in [summary] + [c[1]["note"] for c in w.gl.commit_comments] + [b["body"] for _, b in w.gl.discussions]:
-        assert_natural(body)
+    # GitLab only gets threads for errors and predicted risks: SQL concat (error, line 4) + AI risk (line 2).
+    # Warnings (ignored error, fmt.Println) and AI style remarks stay on Telegram; no summary note.
+    assert not w.gl.commit_comments, "tidak ada komentar di commit"
+    mine = [b for k, b in w.gl.discussions if k == (7, 375)]
+    assert sorted(b["position"]["new_line"] for b in mine) == [2, 4], [b["body"][:60] for b in mine]
+    assert not any("Pindahkan ke usecase" in b["body"] for b in mine), "saran gaya tidak diposting"
+    assert not any("Catatan review standar kode" in n["body"] for n in w.gl.notes_by_me(375))
+    for b in mine:
+        assert_natural(b["body"])
     assert w.gl.statuses and w.gl.statuses[-1][1]["name"] == "code-standard"
-    assert w.gl.discussions, "temuan AI inline"
 
 
 def test_03_no_duplicate_on_repoll(w):
     n_cards = sum(1 for m in w.tg.sent if "!375" in w.tg.messages[m]["text"] and w.tg.buttons(m))
-    n_comments = len(w.gl.commit_comments)
+    n_comments = len(w.gl.discussions)
     cek(w)
     cek(w)
     assert sum(1 for m in w.tg.sent if "!375" in w.tg.messages[m]["text"] and w.tg.buttons(m)) == n_cards
-    assert len(w.gl.commit_comments) == n_comments, "warning tidak boleh diposting ulang"
+    assert len(w.gl.discussions) == n_comments, "komentar tidak boleh diposting ulang"
 
 
 def test_04_merge_waits_for_pipeline_then_merges(w):
@@ -597,12 +601,12 @@ def test_22_graceful_stop_during_merge_finishes_merge(w):
 
 def test_23_restart_no_duplicates_and_kill_during_merge_recovers(w):
     cards_before = sum(1 for m in w.tg.sent if w.tg.buttons(m))
-    comments_before = len(w.gl.commit_comments)
+    comments_before = len(w.gl.discussions)
     w.app.start()
     wait(lambda: w.tg.texts().count(next(t for t in w.tg.texts() if "MR Pilot aktif" in t)) >= 2, 40, "start ke-2")
     cek(w)
     assert sum(1 for m in w.tg.sent if w.tg.buttons(m)) == cards_before, "tidak ada kartu duplikat"
-    assert len(w.gl.commit_comments) == comments_before
+    assert len(w.gl.discussions) == comments_before
     # kill -9 in the middle of a merge, GitLab finished it
     w.gl.add_mr(520, "fix: kill", "c5" * 20, files={"a.go": GO_OK})
     n = len(w.tg.sent)
@@ -676,7 +680,7 @@ def test_26_dashboard_writes_and_bot_commands(w):
     # a new team rule saved from the dashboard is enforced on the next commit
     with open(rules_p, encoding="utf-8") as f:
         rules = f.read()
-    rules += ("\n  - id: e2e-no-println\n    stacks: [\"*\"]\n    severity: warning\n"
+    rules += ("\n  - id: e2e-no-println\n    stacks: [\"*\"]\n    severity: error\n"
               "    pattern: 'fmt\\.Println'\n    message: Pakai logger, bukan fmt.Println.\n")
     code, body, _ = http(w, "/api/standards/rules.yaml", "PUT", {"content": rules}, hdr)
     assert code == 200, body
@@ -689,8 +693,8 @@ def test_26_dashboard_writes_and_bot_commands(w):
     n = len(w.tg.sent)
     cek(w)
     mid = card(w, 530, n)
-    wait(lambda: "Pakai logger, bukan fmt.Println." in json.dumps(w.gl.commit_comments), 20, "warning aturan baru di commit")
-    assert "e2e-no-println" not in json.dumps(w.gl.commit_comments), "id aturan tidak tampil di GitLab"
+    wait(lambda: "Pakai logger, bukan fmt.Println." in json.dumps(w.gl.discussions), 20, "aturan baru di MR")
+    assert "e2e-no-println" not in json.dumps(w.gl.discussions), "id aturan tidak tampil di GitLab"
     # valid AI change is saved
     code, body, _ = http(w, "/api/ai", "PUT", {"providers": {"ai-b": {"timeout": 90}}}, hdr)
     assert code == 200, body
@@ -939,7 +943,7 @@ def test_32_reset_clears_history_keeps_keys(w):
     # cancel = nothing deleted
     r = run(inp="tidak\n")
     assert r.returncode == 1 and "Dibatalkan" in r.stdout and db_status(w, "7:540") == "notified"
-    comments = len(w.gl.commit_comments)
+    comments = len(w.gl.discussions)
     r = run(inp="RESET\n")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "Riwayat MR" in r.stdout and "data/.env (token & API key)" in r.stdout
@@ -960,7 +964,7 @@ def test_32_reset_clears_history_keeps_keys(w):
     wait(lambda: w.tg.find("MR Pilot aktif", n), 40, "start setelah reset")
     cek(w)
     card(w, 540, n)
-    assert len(w.gl.commit_comments) == comments, "komentar commit tidak boleh diposting ulang"
+    assert len(w.gl.discussions) == comments, [(k, b["body"][:70], (b.get("position") or {}).get("new_line")) for k, b in w.gl.discussions[comments:]]
 
 
 GO_TEST_LOG = ("\x1b[0KRunning with gitlab-runner 17.0.0\n$ go test ./...\nok  \tidas/a\t0.1s\n"
@@ -1040,22 +1044,19 @@ def test_34_send_suggestions_to_mr(w):
     n = len(w.tg.sent)
     w.tg.press(mid, w.tg.buttons(mid)["💬 Kirim saran ke MR"])
     done = wait(lambda: w.tg.find("saran dikirim", n), 20, "konfirmasi saran")
-    assert "2 saran dikirim" in w.tg.messages[done]["text"] and "1 bisa langsung di-Apply" in w.tg.messages[done]["text"]
-    mine = ("Pakai parameter query", "Tangani error dari repo.Find", "Halusinasi")
+    assert "1 saran dikirim" in w.tg.messages[done]["text"] and "1 bisa langsung di-Apply" in w.tg.messages[done]["text"]
+    mine = ("id dari request digabung", "Tangani error dari repo.Find", "Halusinasi")
     posted = [b for k, b in w.gl.discussions[before:] if k == (7, 590) and any(x in b["body"] for x in mine)]
-    assert len(posted) == 2
-    sql = next(b for b in posted if "Pakai parameter query" in b["body"])
-    for b in posted:
-        assert_natural(b["body"])
-    assert "id dari request digabung" in sql["body"]
-    assert next(b for b in posted if "repo.Find" in b["body"])["body"].startswith("nit: ")
+    assert len(posted) == 1, "minor tidak dikirim ke GitLab"
+    sql = posted[0]
+    assert_natural(sql["body"])
     assert sql["position"]["new_line"] == 4 and sql["position"]["new_path"] == "internal/q/usecase.go"
     assert '```suggestion:-0+0\n\tq := "SELECT * FROM t WHERE id = ?"\n```' in sql["body"]
     assert not any("Halusinasi" in b["body"] for b in posted), "temuan tanpa bukti tidak dikirim"
     n = len(w.tg.sent)
     w.tg.press(mid, w.tg.buttons(mid)["💬 Kirim saran ke MR"])
     wait(lambda: w.tg.find("sudah pernah dikirim", n), 15, "tidak dobel")
-    assert len([1 for k, b in w.gl.discussions if k == (7, 590) and any(x in b["body"] for x in mine)]) == 2
+    assert len([1 for k, b in w.gl.discussions if k == (7, 590) and any(x in b["body"] for x in mine)]) == 1
 
 
 def test_35_digest_and_reminders(w):
@@ -1284,3 +1285,44 @@ def test_38_dora_metrics(w):
     # the main page links to both dashboards
     body = http(w, "/", headers=hdr)[1]
     assert b'href="/security"' in body and b'href="/dora"' in body
+
+
+GO_FIXED = (" func Get(id string) {\n+\tdata, err := repo.Find(id)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n"
+            "+\trow := db.QueryRow(\"SELECT * FROM t WHERE id = $1\", id)\n+\treturn\n")
+
+
+def test_39_team_fix_is_checked_and_threads_closed(w):
+    title = "fix(IDAS-5401): query laporan"
+    w.verdicts[title] = {"verdict": "APPROVE"}
+    w.gl.add_mr(620, title, "7a" * 20, files={"internal/x/usecase.go": GO_BAD})
+    n = len(w.tg.sent)
+    cek(w)
+    card(w, 620, n)
+    mine = lambda: [b for k, b in w.gl.discussions if k == (7, 620)]  # noqa: E731
+    # error rules (SQL concat line 4, the team's println rule line 3) + the AI's predicted risk (line 2)
+    assert sorted(b["position"]["new_line"] for b in mine()) == [2, 3, 4], [b["body"][:50] for b in mine()]
+    sql = next(b for b in mine() if b["position"]["new_line"] == 4)
+    risk = next(b for b in mine() if b["position"]["new_line"] == 2)
+    # developer answers "sudah" and pushes an unrelated commit: MR Pilot checks and says it's still the same
+    w.gl.reply_as(sql["id"], "dewi.l", "sudah saya perbaiki pak")
+    w.gl.push(620, "7b" * 20, {"README.md": "+catatan\n"}, msg="docs: catatan")
+    n = len(w.tg.sent)
+    cek(w)
+    card(w, 620, n)
+    assert "masih sama" in sql["notes"][-1]["body"] and "`7b7b7b7b`" in sql["notes"][-1]["body"]
+    assert not sql["resolved"] and not risk["resolved"] and len(mine()) == 3, "tidak ada komentar baru"
+    assert not any("masih" in x["body"] for x in risk["notes"][1:]), "thread tanpa balasan developer tidak dibalas"
+    # the real fix: every thread gets a short reply and is resolved, the Telegram card says so
+    w.gl.push(620, "7c" * 20, {"internal/x/usecase.go": GO_FIXED}, msg="fix: tangani error dan parameter query")
+    w.gl.mr_diffs[(7, 620)] = [d for d in w.gl.mr_diffs[(7, 620)] if d["new_path"] != "internal/x/usecase.go"
+                               or "repo.Find(id)" in d["diff"] and "err :=" in d["diff"]]
+    n = len(w.tg.sent)
+    cek(w)
+    c = card(w, 620, n)
+    assert all(d["resolved"] for d in mine())
+    for d in mine():
+        assert "Sudah" in d["notes"][-1]["body"] and "`7c7c7c7c`" in d["notes"][-1]["body"]
+        assert_natural(d["notes"][-1]["body"])
+    t = w.tg.messages[c]["text"]
+    assert "3 catatan sudah diperbaiki" in t and len(mine()) == 3
+    assert db_status(w, "7:620") == "notified"

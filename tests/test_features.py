@@ -196,26 +196,50 @@ def test_comment_body_has_apply_block():
     assert "suggestion:" not in comment_body(f, inline=False) and "`a.go:3`" in comment_body(f, inline=False)
     assert comment_body({**f, "fix_code": "a ``` b"}, True).count("````") == 2  # fence can't break
     assert "suggestion" not in comment_body({**f, "fix_code": f["evidence"]}, True), "tidak ada perubahan"
-    assert [x["title"] for x in postable(FINDINGS)] == ["SQL injection", "Di luar diff"]
+    assert [x["title"] for x in postable(FINDINGS)] == ["SQL injection"], "minor tidak dikirim ke GitLab"
+    assert [x["title"] for x in postable(FINDINGS, None)] == ["SQL injection", "Di luar diff"]
 
 
 class DiscGL:
     def __init__(self):
-        self.disc = []
+        self.disc, self.threads = [], {}
 
     def mr_discussion(self, pid, iid, body, position=None):
         if position and position["new_line"] not in (1, 2, 3):
             raise requests.HTTPError("400 line_code can't be blank")
         self.disc.append((body, position))
+        did = f"d{len(self.disc)}"
+        self.threads[did] = {"notes": [{"body": body, "author": {"username": "nova"}, "resolvable": True}]}
+        return {"id": did}
+
+    def get_discussion(self, pid, iid, did):
+        return {"notes": self.threads[did]["notes"]}
+
+    def reply_discussion(self, pid, iid, did, body):
+        self.threads[did]["notes"].append({"body": body, "author": {"username": "nova"}})
+
+    def resolve_discussion(self, pid, iid, did, resolved=True):
+        self.threads[did]["resolved"] = resolved
 
 
-def test_post_findings_inline_fallback_and_once(tmp_path):
+MAJOR_OUTSIDE = {"findings": FINDINGS["findings"] + [
+    {"severity": "major", "file": "a.go", "line": 99, "title": "Nil map", "evidence": "m[k] = v", "verified": True}]}
+
+
+def test_post_findings_once_per_mr_and_closed_when_fixed(tmp_path):
+    from mr_pilot.threads import ThreadTracker
     store = Store(str(tmp_path / "db"))
     gl = DiscGL()
     mr = {"project_id": 7, "iid": 1, "sha": "a", "diff_refs": {"base_sha": "b", "start_sha": "s", "head_sha": "a"}}
-    assert post_findings(gl, store, mr, FINDINGS) == (2, 1, 0)
+    assert post_findings(gl, store, mr, MAJOR_OUTSIDE) == (2, 1, 0), "minor tidak dikirim"
     inline, outside = gl.disc
     assert inline[1]["new_line"] == 3 and "```suggestion" in inline[0]
     assert outside[1] is None and "`a.go:99`" in outside[0] and "suggestion:" not in outside[0]
-    assert post_findings(gl, store, mr, FINDINGS) == (0, 0, 2) and len(gl.disc) == 2
-    assert post_findings(gl, store, {**mr, "sha": "new"}, FINDINGS)[0] == 2, "commit baru = saran baru"
+    assert post_findings(gl, store, mr, MAJOR_OUTSIDE) == (0, 0, 2) and len(gl.disc) == 2
+    assert post_findings(gl, store, {**mr, "sha": "new"}, MAJOR_OUTSIDE)[0] == 0, "masih terbuka: tidak diulang"
+    # next commit: the SQL line was rewritten, the nil map line is still there
+    diffs = [{"new_path": "a.go", "diff": "@@ -1,0 +1,2 @@\n+\tq := \"SELECT * FROM t WHERE id = ?\"\n+m[k] = v\n"}]
+    th = ThreadTracker(gl, store).reconcile({**mr, "sha": "b2c3d4e5f6"}, diffs)
+    assert th["fixed"] == ["SQL injection"] and th["open"] == 1
+    assert gl.threads["d1"]["resolved"] and "b2c3d4e5" in gl.threads["d1"]["notes"][-1]["body"]
+    assert not gl.threads["d2"].get("resolved")

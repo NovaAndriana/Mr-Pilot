@@ -390,12 +390,23 @@ class App:
                 c = quality["counts"]
                 lvl = "error" if c["error"] else ("warning" if c["warning"] else "success")
                 self.event("quality", f"Standar kode !{iid}: {c['error']} error, {c['warning']} warning, "
-                           f"{c['info']} info", f"{quality['posted']} warning diposting ke GitLab", key, lvl)
+                           f"{c['info']} info", f"{quality['posted']} komentar baru di GitLab", key, lvl)
+                self._threads_event(iid, key, quality.get("threads"))
             except Stop:
                 raise
             except Exception as ex:
                 log.warning("Code quality gagal untuk %s: %s", key, short_error(ex))
                 self.event("error", f"Cek standar kode gagal !{iid}", short_error(ex), key, "error")
+        elif not same_sha and not self.dry:
+            # code-standard check off: still follow up the review comments the team may have fixed
+            try:
+                th = self.quality.threads.reconcile(
+                    mr, self.gl.get_diffs(pid, iid),
+                    adopt=(self.cfg["code_quality"].get("report") or {}).get("follow_up_existing", True))
+                self._threads_event(iid, key, th)
+                quality = {"threads": th} if th.get("fixed") or th.get("open") else None
+            except Exception as ex:
+                log.info("cek ulang komentar !%s: %s", iid, short_error(ex))
         if header is None:
             is_update = bool(rec and rec.get("tg_msg_id") and not same_sha)
             header = "🔄 MR diperbarui (ada commit baru)" if is_update else "🔔 MR baru untuk direview"
@@ -430,6 +441,11 @@ class App:
             n, ok, _ = post_findings(self.gl, self.store, mr, review, severities=("blocker", "major"))
             if n:
                 self.event("review", f"{n} saran dikirim ke !{iid}", f"{ok} bisa langsung di-Apply", key)
+
+    def _threads_event(self, iid, key, th):
+        if th and th.get("fixed"):
+            self.event("fixed", f"!{iid}: {len(th['fixed'])} catatan sudah diperbaiki",
+                       f"{th['open']} masih terbuka" if th.get("open") else "semua catatan beres", key, "success")
 
     def sync_closed(self, open_keys):
         """MRs merged/closed outside the bot, or where I'm no longer reviewer: update card and status."""

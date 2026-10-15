@@ -185,6 +185,23 @@ class GitLab:
         r.raise_for_status()
         return r.json()
 
+    def list_discussions(self, pid, iid):
+        return self.get_all(f"/projects/{_pid(pid)}/merge_requests/{iid}/discussions", max_pages=10)
+
+    def get_discussion(self, pid, iid, did):
+        return self.get(f"/projects/{_pid(pid)}/merge_requests/{iid}/discussions/{did}")
+
+    def reply_discussion(self, pid, iid, did, body):
+        r = self._req("POST", f"/projects/{_pid(pid)}/merge_requests/{iid}/discussions/{did}/notes", json={"body": body})
+        r.raise_for_status()
+        return r.json()
+
+    def resolve_discussion(self, pid, iid, did, resolved=True):
+        r = self._req("PUT", f"/projects/{_pid(pid)}/merge_requests/{iid}/discussions/{did}",
+                      json={"resolved": bool(resolved)})
+        r.raise_for_status()
+        return r.json()
+
     def edit_note(self, pid, iid, note_id, body):
         r = self._req("PUT", f"/projects/{_pid(pid)}/merge_requests/{iid}/notes/{note_id}", json={"body": body})
         r.raise_for_status()

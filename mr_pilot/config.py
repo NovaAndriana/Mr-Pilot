@@ -90,11 +90,15 @@ DEFAULTS = {
         "ai_max_violations": 8,
         "ai_max_diff_chars": 60000,
         "report": {
-            "commit_comments": True,
-            "min_severity_to_post": "warning",
+            "commit_comments": True,       # post findings to GitLab at all
+            "post_on": "mr",               # mr = resolvable MR threads (followed up) | commit = old commit comments
+            "min_severity_to_post": "error",
             "max_comments_per_commit": 10,
+            "max_open_threads": 6,
             "ai_inline_comments": True,
-            "mr_summary_note": True,
+            "ai_post_risks": True,         # AI "risk" findings (predicted future problems) are posted too
+            "mr_summary_note": False,
+            "follow_up_existing": True,    # older open line threads from this account are followed up too
             "commit_status": True,
             "status_name": "code-standard",
             "status_fail_on": "none",

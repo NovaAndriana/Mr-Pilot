@@ -221,7 +221,7 @@ class Store:
 
     # kv entries that are NOT history: GitLab "already posted" markers (prevent duplicate comments),
     # logged-out sessions, Telegram update offset, cached GitLab username
-    KEEP_KV = ("cq_%", "revoked_sessions", "tg_offset", "gitlab_user")
+    KEEP_KV = ("cq_%", "threads:%", "sugg:%", "revoked_sessions", "tg_offset", "gitlab_user")
 
     HISTORY_TABLES = ("mrs", "events", "violations", "ai_calls", "sec_findings", "sec_projects", "dora_deploys",
                       "dora_incidents")

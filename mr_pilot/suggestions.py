@@ -1,20 +1,18 @@
 """Post AI review findings to the MR as inline comments. When the AI gave replacement code for the exact
 line, the comment carries a GitLab ```suggestion``` block, so the developer can click "Apply suggestion"."""
-import hashlib
 import logging
 
 from . import voice
-from .util import short_error
+from .threads import ThreadTracker
 
 log = logging.getLogger("mr_pilot.suggest")
 
-SEV = {"blocker": "🔴 Blocker", "major": "🟠 Major", "minor": "🟡 Minor", "info": "🔵 Info"}
-
-
-def postable(review):
-    """Findings worth sending: located (file + line) and not shown to be a hallucination."""
+def postable(review, severities=("blocker", "major")):
+    """Findings worth a GitLab comment: serious (minor stays on Telegram), located (file + line) and not
+    shown to be a hallucination."""
     return [f for f in (review or {}).get("findings") or []
-            if f.get("file") and f.get("line") and f.get("verified") is not False]
+            if f.get("file") and f.get("line") and f.get("verified") is not False
+            and (severities is None or f.get("severity") in severities)]
 
 
 def _fence(code):
@@ -35,37 +33,21 @@ def has_fix(f):
     return bool(code) and _norm(code) != _norm(f.get("evidence"))
 
 
-def post_findings(gl, store, mr, review, severities=("blocker", "major", "minor")):
-    """Post each postable finding once (per MR commit). Returns (posted, with_apply_button, skipped)."""
-    refs = mr.get("diff_refs") or {}
+def post_findings(gl, store, mr, review, severities=("blocker", "major")):
+    """Post each postable finding once per MR (not again on every commit while it is still open).
+    Returns (posted, with_apply_button, skipped). Fixed ones are closed later by ThreadTracker.reconcile."""
+    tracker = ThreadTracker(gl, store)
     posted = applicable = skipped = 0
-    for f in postable(review):
-        if f.get("severity") not in severities:
-            continue
-        fp = hashlib.sha1(f"{mr['project_id']}|{mr['iid']}|{mr.get('sha')}|{f['file']}|{f['line']}|"
-                          f"{f.get('title')}".encode()).hexdigest()[:16]
-        if store.kv_get(f"sugg:{fp}"):
+    for f in postable(review, severities):
+        item = {"source": "review", "path": f["file"], "line": int(f["line"]), "title": f.get("title"),
+                "snippet": f.get("evidence") or "", "severity": f.get("severity"),
+                "message": (f.get("detail") or f.get("title") or "")[:200]}
+        if tracker.find(tracker.load(mr["project_id"], mr["iid"]), item, ("open", "resolved")):
             skipped += 1
             continue
-        pos = None
-        if refs.get("head_sha"):
-            pos = {"position_type": "text", "base_sha": refs.get("base_sha"), "start_sha": refs.get("start_sha"),
-                   "head_sha": refs.get("head_sha"), "new_path": f["file"], "old_path": f["file"],
-                   "new_line": int(f["line"])}
-        inline_ok = False
-        try:
-            if pos:
-                gl.mr_discussion(mr["project_id"], mr["iid"], comment_body(f, True), pos)
-                inline_ok = True
-        except Exception as ex:  # line outside the diff: GitLab refuses the position
-            log.info("posisi inline ditolak (%s:%s): %s", f["file"], f["line"], short_error(ex))
-        if not inline_ok:
-            try:
-                gl.mr_discussion(mr["project_id"], mr["iid"], comment_body(f, False))
-            except Exception as ex:
-                log.warning("gagal posting temuan: %s", short_error(ex))
-                continue
-        store.kv_set(f"sugg:{fp}", 1)
+        res = tracker.post(mr, item, lambda inline, f=f: comment_body(f, inline))
+        if not res:
+            continue
         posted += 1
-        applicable += int(inline_ok and has_fix(f))
+        applicable += int(res["inline"] and has_fix(f))
     return posted, applicable, skipped
