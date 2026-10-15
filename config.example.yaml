@@ -71,6 +71,16 @@ merge:
   confirm_if_not_approved: true   # minta konfirmasi kedua jika verdict bukan Approve
   confirm_if_quality_errors: true # minta konfirmasi kedua jika ada error standar kode
   confirm_if_security: true       # minta konfirmasi kedua jika MR membawa secret / temuan keamanan high+ baru
+  confirm_if_order: true          # minta konfirmasi kedua jika ada MR lain yang harus di-merge duluan
+
+merge_order:
+  # Bandingkan MR dengan MR lain yang terbuka ke branch tujuan yang sama: branch bertumpuk, fungsi baru yang
+  # dipakai MR lain, fungsi yang dihapus/diubah padahal dipakai MR lain, nomor migrasi, versi dependency,
+  # dan baris yang sama. Hasilnya: urutan merge di kartu Telegram, konfirmasi saat urutannya salah, dan
+  # peringatan + komentar ke MR yang terdampak setelah ada MR yang di-merge.
+  enabled: ${MERGE_ORDER_ENABLED:-true}
+  max_mrs: 30                     # maksimal MR lain yang dibandingkan per branch tujuan
+  comment_on_affected: true       # beri tahu author MR terdampak lewat komentar (ditutup otomatis setelah rebase)
 
 security:
   # Membaca hasil GitLab SAST + Secret Detection dari pipeline (konfigurasi CI: standards/ci/gitlab-ci-security.yml).

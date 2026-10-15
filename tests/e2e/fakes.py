@@ -49,6 +49,7 @@ class _Base(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(b)
+        return True  # "handled": lets custom merge behaviours stop the default merge
 
     def _drop(self):
         """Simulate a network failure: close without answering."""
@@ -248,6 +249,12 @@ class _GitLabHandler(_Base):
                 rows = [m for m in f.mrs.values() if m["state"] == "opened"
                         and (rev is None or rev in [r["username"] for r in m["reviewers"]])
                         and (asg is None or asg in [a["username"] for a in m["assignees"]])]
+                return self._paged(rows, q)
+            m = re.match(r"^/projects/(\d+)/merge_requests$", p)
+            if m and method == "GET":
+                st, tb = (q.get("state") or [None])[0], (q.get("target_branch") or [None])[0]
+                rows = [x for (pid_, _), x in f.mrs.items() if pid_ == int(m.group(1))
+                        and (not st or x["state"] == st) and (not tb or x["target_branch"] == tb)]
                 return self._paged(rows, q)
             m = re.match(r"^/projects/(\d+)/merge_requests/(\d+)(/.*)?$", p)
             if m:

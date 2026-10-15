@@ -1321,8 +1321,62 @@ def test_39_team_fix_is_checked_and_threads_closed(w):
     c = card(w, 620, n)
     assert all(d["resolved"] for d in mine())
     for d in mine():
-        assert "Sudah" in d["notes"][-1]["body"] and "`7c7c7c7c`" in d["notes"][-1]["body"]
+        assert "sudah" in d["notes"][-1]["body"].lower() and "`7c7c7c7c`" in d["notes"][-1]["body"]
         assert_natural(d["notes"][-1]["body"])
     t = w.tg.messages[c]["text"]
     assert "3 catatan sudah diperbaiki" in t and len(mine()) == 3
     assert db_status(w, "7:620") == "notified"
+
+
+def review_card(W, iid, since=0):
+    """The full review card (not a reminder, which also carries a Merge button)."""
+    return wait(lambda: next((m for m in reversed(W.tg.sent[since:]) if f"!{iid}" in W.tg.messages[m]["text"]
+                              and "Verdict" in W.tg.messages[m]["text"] and W.tg.buttons(m)), None), 40, f"kartu !{iid}")
+
+
+def test_40_merge_order_between_mrs(w):
+    w.verdicts["refactor: ganti nama FormatAmount"] = {"verdict": "APPROVE"}
+    w.verdicts["feat: laporan bulanan"] = {"verdict": "APPROVE"}
+    w.gl.add_mr(640, "refactor: ganti nama FormatAmount", "64" * 20, author=("Bima Saputra", "bima.s"),
+                files={"internal/money/format.go": "-func FormatAmount(v int) string {\n+func FormatRupiah(v int) string {\n"})
+    w.gl.add_mr(641, "feat: laporan bulanan", "41" * 20,
+                files={"internal/report/monthly.go": " func Monthly() {\n+\ts := FormatAmount(total)\n+\t_ = s\n"})
+    n = len(w.tg.sent)
+    cek(w)
+    c640, c641 = review_card(w, 640, n), review_card(w, 641, n)
+    for c in (c640, c641):
+        assert "Merge !641 dulu, baru !640" in w.tg.messages[c]["text"], w.tg.messages[c]["text"][-600:]
+    assert "`FormatAmount`" in w.tg.messages[c641]["text"]
+    # merging the rename first: MR Pilot asks, because !641 still uses the old name
+    n = len(w.tg.sent)
+    w.tg.press(c640, "m|7|640")
+    conf = wait(lambda: w.tg.find("Yakin tetap merge?", n), 20, "konfirmasi urutan")
+    assert "Urutan merge: !641 sebaiknya di-merge dulu" in w.tg.messages[conf]["text"]
+    assert not any(k == (7, 640) for k, _ in w.gl.merges)
+    # merged anyway -> Nova is told which MR will now fail, and its author gets one natural comment
+    n = len(w.tg.sent)
+    w.tg.press(conf, "mf|7|640")
+    alert = wait(lambda: w.tg.find("sudah di-merge ke", n), 30, "peringatan MR terdampak")
+    t = w.tg.messages[alert]["text"]
+    assert "!641" in t and "FormatAmount" in t and "author sudah saya beri tahu" in t
+    note = wait(lambda: [b for k, b in w.gl.discussions if k == (7, 641) and "!640 baru saja di-merge" in b["body"]],
+                10, "komentar ke MR terdampak")[0]
+    assert "`FormatAmount`" in note["body"] and "rebase" in note["body"] and not note.get("position")
+    assert_natural(note["body"])
+    # !641 merge fails now (GitLab refuses): the error explains why
+    w.gl.merge_behaviour[(7, 641)] = lambda h, mr, body: h._json(406, {"message": "Branch cannot be merged"})
+    n = len(w.tg.sent)
+    w.tg.press(c641, "m|7|641")
+    fail = wait(lambda: w.tg.find("Merge !641 gagal", n), 20, "merge gagal")
+    assert "Kemungkinan karena !640" in w.tg.messages[fail]["text"]
+    w.gl.merge_behaviour.pop((7, 641))
+    # Dewi rebases and switches to the new name: the warning thread is closed by itself
+    w.gl.push(641, "42" * 20, {}, msg="fix: pakai FormatRupiah")
+    w.gl.mr_diffs[(7, 641)] = [{"new_path": "internal/report/monthly.go", "old_path": "internal/report/monthly.go",
+                                "diff": "@@ -1,1 +1,3 @@\n func Monthly() {\n+\ts := FormatRupiah(total)\n+\t_ = s\n"}]
+    n = len(w.tg.sent)
+    cek(w)
+    c = review_card(w, 641, n)
+    wait(lambda: note["resolved"], 10, "thread ditutup setelah disesuaikan")
+    assert "sudah" in note["notes"][-1]["body"].lower() and "`42424242`" in note["notes"][-1]["body"]
+    assert "sudah di-merge duluan" not in w.tg.messages[c]["text"]

@@ -83,6 +83,16 @@ def thread_lines(th):
     return out
 
 
+def order_lines(order, iid):
+    from .merge_order import card_lines
+    out = []
+    ab = (order or {}).get("affected_by")
+    if ab:
+        out += ["", f"🔀 <b>!{ab['merged']} sudah di-merge duluan</b>, MR ini perlu disesuaikan:"]
+        out += [f"   {e(r)}" for r in (ab.get("reasons") or [])[:3]]
+    return out + card_lines(order, iid, e)
+
+
 def quality_lines(q):
     if not q:
         return []
@@ -112,7 +122,7 @@ def quality_lines(q):
 RISK_LABEL = {"low": "rendah 🟢", "medium": "sedang 🟡", "high": "tinggi 🔴"}
 
 
-def build_messages(mr, review, flags, header="🔔 MR baru untuk direview", quality=None):
+def build_messages(mr, review, flags, header="🔔 MR baru untuk direview", quality=None, order=None):
     """Return (detail_text_or_None, card_text). Detail is merged into the card when it fits."""
     hp = mr.get("head_pipeline") or mr.get("pipeline") or {}
     st = hp.get("status") or "tidak ada"
@@ -145,6 +155,7 @@ def build_messages(mr, review, flags, header="🔔 MR baru untuk direview", qual
     if review.get("questions"):
         rv += ["", "<b>❓ Tanyakan ke author:</b>"] + [f"• {e(q)}" for q in review["questions"][:3]]
     rv += quality_lines(quality)
+    rv += order_lines(order, mr.get("iid"))
     if flags:
         rv += ["", "<b>Cek otomatis:</b>"] + [f"• {e(x)}" for x in flags]
 

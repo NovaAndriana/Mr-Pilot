@@ -72,6 +72,8 @@ class ThreadTracker:
         """Is `item` (a finding of the current code) the one thread `t` is about?"""
         if t["source"] != item["source"] or t.get("path") != item.get("path"):
             return False
+        if t["source"] == "order":
+            return norm(t.get("title")) == norm(item.get("title"))
         if t["source"] == "review":
             return norm(t.get("title")) == norm(item.get("title")) or (
                 bool(t.get("snippet")) and norm(t["snippet"]) == norm(item.get("snippet")))
@@ -189,6 +191,10 @@ class ThreadTracker:
     def _still_there(self, t, added, current, ai_ok):
         code = added.get(t.get("path"))
         snippet_present = bool(t.get("snippet")) and code is not None and norm(t["snippet"]) in code
+        if t["source"] == "order":
+            return None  # followed up by MergeOrder.followup (needs the merged MR's analysis)
+        if t["source"] == "order":
+            return None  # followed up by MergeOrder.followup (needs the merged MR's analysis)
         if t["source"] == "review":
             if not t.get("snippet"):
                 return None
