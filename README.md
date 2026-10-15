@@ -146,8 +146,22 @@ Setiap panggilan AI dicatat (jumlah request dan token), lalu dihitung per 24 jam
 
 Tips agar tidak kena limit: pasang 2-3 provider gratis berurutan (mis. Gemini → Groq → OpenRouter `:free`), dan arahkan *Cek standar kode* ke Groq yang kuotanya besar.
 
-### Gaya komentar di GitLab
-Komentar yang diposting dari akun Anda ditulis seperti reviewer manusia: tanpa label bot, id aturan, tabel, emoji, atau footer "otomatis". Isinya tetap lengkap: apa masalahnya, kenapa berbahaya (dengan contoh skenario), di mana (`file:baris`), dan cara memperbaikinya. Hal kecil diawali `nit:`. Ringkasan di MR dikelompokkan menjadi *Perlu diperbaiki sebelum merge*, *Sebaiknya dirapikan*, dan *Catatan kecil*, dan berubah jadi "sudah beres semua" setelah developer memperbaikinya. Kalau tetap mau ada footer, isi `code_quality.report.comment_footer`.
+### Komentar di GitLab: sedikit, penting, dan ditindaklanjuti
+MR Pilot hanya berkomentar di GitLab untuk dua hal:
+- **Error:** sesuatu yang pasti bermasalah sekarang. Contohnya aturan level `error` (SQL injection, secret di kode, dan sejenisnya), atau bug, celah keamanan, dan kontrak API yang rusak yang ditemukan AI.
+- **Risiko ke depan:** belum error hari ini, tapi diprediksi jadi masalah. Contohnya error yang tidak ditangani, request tanpa autentikasi, atau query yang akan lambat saat data besar. AI menuliskan kapan dan bagaimana masalahnya akan muncul.
+
+Penamaan, gaya, panjang file, `console.log`, `any`, key index, dan sejenisnya **tidak** dikomentari di GitLab. Semua itu tetap terlihat di kartu Telegram dan dashboard. Saran review level minor juga tidak dikirim. Maksimal ada 6 thread terbuka per MR (`max_open_threads`), dan tidak ada komentar ringkasan (`mr_summary_note: false`).
+
+**Tindak lanjut otomatis setiap ada commit baru dari tim:**
+- **Sudah diperbaiki:** MR Pilot membalas singkat, misalnya "Sudah diperbaiki di `abc12345`, thanks!", lalu menutup (*resolve*) thread-nya. Kartu Telegram menampilkan "✅ N catatan sudah diperbaiki".
+- **Developer membalas "sudah" tapi kodenya masih sama:** MR Pilot membalas sekali per commit bahwa bagian itu masih sama.
+- **Thread ditutup manual oleh orang:** dibiarkan, dan tidak dikomentari ulang.
+- **Temuan yang sama:** tidak diposting ulang selama thread-nya masih terbuka.
+- **Temuan dari AI:** hanya dianggap beres kalau baris kode yang dikomentari memang berubah. Jadi jawaban AI yang berubah-ubah tidak membuat thread tertutup sendiri.
+- **Thread lama:** thread terbuka di baris kode dari akun Anda, termasuk komentar dari versi MR Pilot sebelumnya, ikut dipantau dan ditutup saat barisnya diperbaiki (`follow_up_existing`).
+
+Gaya tulisannya seperti reviewer manusia: tanpa label bot, id aturan, tabel, emoji, atau footer "otomatis". Kalau tetap mau ada footer, isi `code_quality.report.comment_footer`.
 
 ---
 
@@ -190,12 +204,12 @@ python -m mr_pilot --check-standards internal/workflow/usecase.go
 ```
 
 ### Apa yang terjadi saat ada MR baru/commit baru
-1. **Setiap commit baru** dicek dengan `rules.yaml` dan konvensi pesan commit. Pelanggaran level `warning`/`error` diposting sebagai **komentar di commit tersebut, tepat di baris kodenya**. Setiap commit hanya dicek sekali.
-2. **Kondisi MR keseluruhan** dicek: aturan, judul MR, dan PR checklist. Jika `ai_check: true`, AI juga membandingkan diff dengan dokumen `.md` dan hanya temuan dengan keyakinan tinggi yang dipakai, sebagai komentar inline di diff.
-3. **Satu komentar ringkasan** di MR yang di-update setiap ada commit baru (tidak spam), ditambah status commit `code-standard`.
-4. Kartu Telegram menampilkan jumlah error/warning. Jika ada **error**, tombol Merge meminta konfirmasi kedua.
+1. **Setiap commit baru** dicek dengan `rules.yaml` dan konvensi pesan commit. Hasilnya dicatat untuk dashboard dan statistik.
+2. **Kondisi MR keseluruhan** dicek: aturan, judul MR, dan PR checklist. Jika `ai_check: true`, AI juga membandingkan diff dengan dokumen `.md`, tapi hanya melaporkan error dan risiko ke depan dengan keyakinan tinggi.
+3. **Komentar di GitLab** hanya untuk error dan risiko, sebagai thread di baris kodenya, dan ditutup otomatis saat tim memperbaikinya (lihat *Komentar di GitLab* di atas). Status commit `code-standard` tetap diisi.
+4. Kartu Telegram menampilkan jumlah error/warning beserta catatan yang sudah diperbaiki. Jika ada **error**, tombol Merge meminta konfirmasi kedua.
 
-> Komentar diposting dari akun GitLab Anda. Coba dulu dengan `python -m mr_pilot --dry-run` (atau `docker compose run --rm mr-pilot --dry-run`), yang hanya mencetak tanpa posting. Kalau terlalu ramai, naikkan `report.min_severity_to_post` ke `error` atau matikan `report.commit_comments`.
+> Komentar diposting dari akun GitLab Anda. Coba dulu dengan `python -m mr_pilot --dry-run` (atau `docker compose run --rm mr-pilot --dry-run`), yang hanya mencetak tanpa posting. Mau warning ikut dikomentari? Ubah `report.min_severity_to_post` ke `warning`. Mau tanpa komentar sama sekali? Matikan `report.commit_comments`.
 
 `status_fail_on: error` membuat status commit merah jika ada error. Kalau project memakai "Pipelines must succeed", ini **ikut menahan merge**. Default-nya `none` (hanya informasi).
 

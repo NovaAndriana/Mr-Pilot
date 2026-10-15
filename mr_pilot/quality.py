@@ -1,5 +1,5 @@
-"""Code Quality: check MRs against the team's written standards and warn on the commits."""
-import hashlib
+"""Code Quality: check MRs against the team's written standards. GitLab only gets comments for errors and
+predicted risks; they are followed up (resolved) when the team fixes them."""
 import logging
 import time
 
@@ -7,6 +7,7 @@ import requests
 
 from . import voice
 from .ai import AIManager
+from .threads import ThreadTracker, line_text
 from .util import short_error
 from .reviewer import extract_json
 from .standards import (SEV_RANK, Standards, annotate_diff, count_by_severity, sort_violations,
@@ -16,27 +17,31 @@ log = logging.getLogger("mr_pilot.quality")
 
 SEV_ICON = {"error": "❌", "warning": "⚠️", "info": "ℹ️"}
 
-AI_PROMPT = """Kamu adalah reviewer yang mengecek kepatuhan kode terhadap STANDAR TIM berikut.
-Hanya laporkan pelanggaran yang JELAS terlihat pada baris yang DITAMBAHKAN (baris berawalan L<nomor> +).
-Jangan laporkan hal yang tidak diatur di standar. Jangan mengulang hal yang sudah dicek oleh aturan otomatis:
-{auto_rules}
-Gunakan nomor baris dari prefiks L<nomor>. Maksimal {max_items} pelanggaran, paling penting dulu.
-severity: error (melanggar aturan wajib/berisiko), warning (melanggar standar), info (saran).
-confidence: high hanya jika kamu yakin itu melanggar standar yang tertulis.
-Tulis message dalam bahasa {language}: 1-3 kalimat yang menyebut masalahnya, dampaknya, dan cara memperbaikinya.
+AI_PROMPT = """Kamu reviewer senior yang mengecek kode terhadap STANDAR TIM berikut.
+Komentarmu akan diposting di GitLab, jadi laporkan HANYA dua hal ini, pada baris yang DITAMBAHKAN (L<nomor> +):
+- error: pasti bermasalah sekarang. Bug, crash, data salah, celah keamanan, kontrak API rusak, atau melanggar
+  aturan wajib di standar yang berdampak nyata.
+- risk: belum error hari ini, tapi hampir pasti jadi masalah ke depan. Contoh: error/response tidak ditangani,
+  request tanpa autentikasi/interceptor standar, race condition, query tanpa limit yang akan lambat saat data
+  besar, nilai yang akan pecah saat input kosong/null, ketergantungan yang akan rusak saat konfigurasi berubah.
+  Tulis prediksinya dengan skenario konkret: kapan dan bagaimana masalahnya akan muncul.
+JANGAN laporkan: penamaan variabel, format/gaya, panjang file atau komponen, console.log, tipe any, key index,
+TODO, komentar kode, atau saran "lebih rapi" lainnya. Kalau ragu, jangan laporkan.
+Jangan mengulang hal yang sudah dicek oleh aturan otomatis: {auto_rules}
+Gunakan nomor baris dari prefiks L<nomor>. Maksimal {max_items} temuan, paling penting dulu. Lebih baik 0 temuan
+daripada temuan lemah.
+confidence: high hanya jika kamu yakin dan bisa menunjuk barisnya.
+Tulis message dalam bahasa {language}: 2-3 kalimat. Apa masalahnya, kapan/bagaimana dampaknya terjadi, cara
+memperbaikinya.
 <<VOICE>>
 
 === STANDAR TIM ===
 {standards}
 === AKHIR STANDAR ===
 
-Jawab HANYA JSON: {{"violations": [{{"rule": "nama/bagian standar", "severity": "error|warning|info",
+Jawab HANYA JSON: {{"violations": [{{"rule": "nama/bagian standar", "severity": "error|risk",
 "file": "path", "line": 123, "message": "...", "confidence": "high|medium|low"}}]}}"""
 AI_PROMPT = AI_PROMPT.replace("<<VOICE>>", voice.VOICE_RULES.replace("{", "{{").replace("}", "}}"))
-
-
-def _fp(*parts):
-    return hashlib.sha1("|".join(str(p) for p in parts).encode()).hexdigest()[:16]
 
 
 class CodeQuality:
@@ -50,6 +55,7 @@ class CodeQuality:
         self.std = Standards(self.cfg, base_dir) if self.enabled else None
         self.report = self.cfg.get("report") or {}
         self.ignore = cfg["review"].get("ignore_files") or []
+        self.threads = ThreadTracker(gl, store)
 
     # --------------------------------------------------------------- public
     def run(self, mr, dry=False):
@@ -88,7 +94,7 @@ class CodeQuality:
                 continue
             vs = self.std.check_diffs(diffs, self.ignore) + self.std.check_commit_message(c.get("message"))
             vs = sort_violations(vs)
-            if vs and not dry and self.report.get("commit_comments", True):
+            if vs and not dry and self.report.get("commit_comments", True) and self.report.get("post_on") == "commit":
                 posted += self._post_commit_comments(pid, c, vs)
             self.store.add_commit_violations(key, csha, c.get("author_name"), project, vs)
             self.store.kv_set(f"cq_commit:{pid}:{csha}", f"{len(vs)}|{time.time():.0f}")
@@ -100,32 +106,45 @@ class CodeQuality:
         current += self.std.check_checklist(mr.get("description"))
 
         # 3) AI check against the written standards (only for a new head sha)
-        ai_vs, ai_note = [], ""
+        ai_vs, ai_note, ai_ok = [], "", False
         if self.cfg.get("ai_check") and self._llm_ok():
-            cache_key = f"cq_ai:{pid}:{sha}"
+            cache_key = f"cq_ai:{pid}:{iid}:{sha}"  # same commit can head two MRs (staging + main)
             cached = self.store.kv_get(cache_key)
             if cached is None:
                 ai_vs, ai_note = self._ai_check(mr, diffs)
-                if not dry:
-                    posted += self._post_ai_inline(mr, ai_vs)
                 if not ai_note:  # only cache a successful check; a failed one is retried next time
                     self.store.kv_set(cache_key, len(ai_vs))
+                    ai_ok = True
             else:
                 ai_vs = [v for v in self.store.mr_violations(key) if v.get("source") == "ai"]
+                ai_ok = True
+        for v in ai_vs:
+            if not v.get("snippet") and v.get("path") and v.get("line"):
+                v["snippet"] = line_text(diffs, v["path"], v["line"]).strip()[:200]
         current = sort_violations(current + ai_vs)
         self.store.replace_mr_violations(key, sha, project, current)
+
+        # 3b) GitLab threads: close what the team fixed, then comment only on new errors / risks
+        threads = {"open": 0, "fixed": [], "fixed_total": 0}
+        if not dry and self.report.get("post_on", "mr") == "mr":
+            items = [self._item(v) for v in current]
+            threads = self.threads.reconcile(mr, diffs, current=items, ai_ok=ai_ok,
+                                             adopt=self.report.get("follow_up_existing", True))
+            new = self._post_threads(mr, current, {d.get("new_path") for d in diffs if not d.get("deleted_file")})
+            posted += new
+            threads["open"] += new
 
         counts = count_by_severity(current)
         summary = {"enabled": True, "counts": counts, "total": len(current),
                    "top": [{k: v.get(k) for k in ("rule", "severity", "path", "line", "message", "source")}
                            for v in current[:6]],
-                   "posted": posted, "ai_note": ai_note,
+                   "posted": posted, "ai_note": ai_note, "threads": threads,
                    "rule_errors": self.std.rule_errors[:3]}
 
         # 4) summary note on the MR + commit status on head
         if not dry:
-            if self.report.get("mr_summary_note", True):
-                self._upsert_summary_note(pid, iid, mr, current, counts)
+            if self.report.get("mr_summary_note", False):
+                self._upsert_summary_note(pid, iid, mr, [v for v in current if self.postable(v)], counts)
             if self.report.get("commit_status", True):
                 self._set_status(pid, sha, mr, counts)
         return summary
@@ -209,38 +228,56 @@ class CodeQuality:
                 line = int(x.get("line")) if x.get("line") else None
             except (TypeError, ValueError):
                 line = None
-            out.append(violation(str(x.get("rule") or "standar")[:60], str(x.get("severity", "warning")).lower(),
-                                 str(x.get("message") or "")[:400], path, line, "ai",
-                                 stack=per_stack.get(path, "")))
+            sev = str(x.get("severity", "")).lower()
+            if sev not in ("error", "risk"):
+                continue  # style / naming / "nice to have": not worth a comment
+            v = violation(str(x.get("rule") or "standar")[:60], "error" if sev == "error" else "warning",
+                          str(x.get("message") or "")[:500], path, line, "ai", stack=per_stack.get(path, ""))
+            v["risk"] = sev == "risk"
+            out.append(v)
         return out, ""
 
-    def _post_ai_inline(self, mr, vs):
-        if not vs or not self.report.get("ai_inline_comments", True):
-            return 0
-        refs = mr.get("diff_refs") or {}
+    # ----------------------------------------------------------- threads
+    def postable(self, v):
+        """Only what the team must act on goes to GitLab: errors, and risks the AI predicts.
+        Warnings/info stay on Telegram and the dashboard."""
+        if v.get("source") == "convention":
+            return False
+        if v.get("source") == "ai":
+            if not self.report.get("ai_inline_comments", True):
+                return False
+            return v["severity"] == "error" or (v["severity"] == "warning" and self.report.get("ai_post_risks", True))
+        if not self.report.get("commit_comments", True):
+            return False
+        return SEV_RANK.get(v["severity"], 3) <= SEV_RANK.get(self.report.get("min_severity_to_post", "error"), 0)
+
+    @staticmethod
+    def _item(v):
+        return {"source": "ai" if v.get("source") == "ai" else ("rule" if v.get("source") == "rule" else v.get("source")),
+                "path": v.get("path"), "line": v.get("line"), "rule": v.get("rule"), "snippet": v.get("snippet"),
+                "severity": v.get("severity"), "message": (v.get("message") or "")[:200]}
+
+    def _post_threads(self, mr, current, paths):
+        # cap on threads open at the same time on one MR: the rest stays on Telegram/dashboard, and is only
+        # commented after earlier ones are fixed (no trickle of new comments on every re-check)
+        limit = int(self.report.get("max_open_threads", self.report.get("max_comments_per_run", 6)))
+        open_items = self.threads.load(mr["project_id"], mr["iid"])
+        n_open = sum(1 for t in open_items if t.get("status") == "open")
         n = 0
-        for v in vs:
-            fp = _fp(mr["project_id"], mr["iid"], v["rule"], v.get("path"), v.get("line"), v["message"][:60])
-            if self.store.kv_get(f"cq_ai_posted:{fp}"):
+        for v in current:
+            if n_open >= limit or not self.postable(v):
                 continue
-            pos = None
-            if v.get("path") and v.get("line") and refs.get("head_sha"):
-                pos = {"position_type": "text", "base_sha": refs.get("base_sha"),
-                       "start_sha": refs.get("start_sha"), "head_sha": refs.get("head_sha"),
-                       "new_path": v["path"], "old_path": v["path"], "new_line": v["line"]}
-            try:
-                if not pos:
-                    raise ValueError("tanpa posisi")
-                self.gl.mr_discussion(mr["project_id"], mr["iid"], self._comment_body(v, True), pos)
-            except Exception:
-                try:  # line not in diff -> post without position, naming the location in the text
-                    self.gl.mr_discussion(mr["project_id"], mr["iid"], self._comment_body(v, False))
-                except Exception:
-                    log.exception("gagal posting temuan AI")
-                    continue
-            v["posted"] = True
-            self.store.kv_set(f"cq_ai_posted:{fp}", 1)
-            n += 1
+            if v.get("path") and v["path"] not in paths:
+                continue  # e.g. an AI finding on a file this MR doesn't touch
+            item = self._item(v)
+            # already discussed: still open, or a person resolved it (their call, don't repeat)
+            if self.threads.find(open_items, item, ("open", "resolved")):
+                continue
+            if self.threads.post(mr, item, lambda inline, v=v: self._comment_body(v, inline)):
+                v["posted"] = True
+                n += 1
+                n_open += 1
+                open_items = self.threads.load(mr["project_id"], mr["iid"])
         return n
 
     def _upsert_summary_note(self, pid, iid, mr, vs, counts):

@@ -129,18 +129,21 @@ class FakeResp:
 
 
 class QGL:
+    """Fake GitLab for code-quality runs, with resolvable MR discussions."""
     def __init__(self):
         self.commit_comments, self.notes, self.edits, self.statuses, self.discussions = [], [], [], [], []
+        self.threads = {}  # id -> {"notes": [...], "resolved": bool}
+        self.diff = GO_DIFF
 
     def get_commits(self, pid, iid):
         return [{"id": "c1" * 20, "message": "update stuff", "author_name": "Dewi", "parent_ids": ["p"]},
                 {"id": "m1" * 20, "message": "Merge branch x", "author_name": "Dewi", "parent_ids": ["a", "b"]}]
 
     def get_commit_diff(self, pid, sha):
-        return [{"new_path": "internal/a/b.go", "diff": GO_DIFF}]
+        return [{"new_path": "internal/a/b.go", "diff": self.diff}]
 
     def get_diffs(self, pid, iid):
-        return [{"new_path": "internal/a/b.go", "diff": GO_DIFF}, {"new_path": "go.sum", "diff": "+x"}]
+        return [{"new_path": "internal/a/b.go", "diff": self.diff}, {"new_path": "go.sum", "diff": "+x"}]
 
     def commit_comment(self, pid, sha, note, path=None, line=None):
         self.commit_comments.append((sha, path, line, note))
@@ -155,8 +158,31 @@ class QGL:
     def commit_status(self, pid, sha, state, name, description="", target_url=None, ref=None):
         self.statuses.append((sha, state, name, description))
 
-    def mr_discussion(self, *a, **k):
-        self.discussions.append(a)
+    def mr_discussion(self, pid, iid, body, position=None):
+        did = f"d{len(self.discussions) + 1}"
+        self.discussions.append((pid, iid, body, position))
+        self.threads[did] = {"notes": [{"body": body, "author": {"username": "nova"}, "resolvable": True,
+                                        "resolved": False}]}
+        return {"id": did}
+
+    def list_discussions(self, pid, iid):
+        return [{"id": k, "notes": [{**t["notes"][0], "resolved": t.get("resolved", False)}]}
+                for k, t in self.threads.items()]
+
+    def get_file_raw(self, pid, path, ref):
+        return "\n" * 11 + "\tfmt.Println(data)\n"
+
+    def get_discussion(self, pid, iid, did):
+        t = self.threads[did]
+        for n in t["notes"]:
+            n["resolved"] = t.get("resolved", False)
+        return {"id": did, "notes": t["notes"]}
+
+    def reply_discussion(self, pid, iid, did, body):
+        self.threads[did]["notes"].append({"body": body, "author": {"username": "nova"}, "resolvable": True})
+
+    def resolve_discussion(self, pid, iid, did, resolved=True):
+        self.threads[did]["resolved"] = resolved
 
 
 def mr(sha="h1"):
@@ -165,27 +191,85 @@ def mr(sha="h1"):
             "diff_refs": {"base_sha": "b", "start_sha": "s", "head_sha": sha}}
 
 
-def test_code_quality_run_posts_on_commit_and_dedups():
+def test_only_errors_are_commented_and_fixes_are_followed_up():
+    cfg = std_cfg()
+    cfg["code_quality"]["ai_check"] = False
+    gl, store = QGL(), Store(":memory:")
+    store.kv_set("gitlab_user", "nova")
+    cq = CodeQuality(cfg, gl, store)
+    s = cq.run(mr())
+    # 1 error (sql concat) + warnings (ignored error, fmt.Println) + info (checklist): only the error goes to GitLab
+    assert s["counts"]["error"] == 1 and s["counts"]["warning"] == 2 and s["counts"]["info"] >= 1
+    assert not gl.commit_comments and not gl.notes, "tanpa komentar commit / ringkasan"
+    assert len(gl.discussions) == 1 and s["posted"] == 1
+    body, pos = gl.discussions[0][2], gl.discussions[0][3]
+    assert pos["new_line"] == 13 and "SQL injection" in body and "go-sql-concat" not in body
+    assert gl.statuses[0][1] == "success" and "1 error" in gl.statuses[0][3]
+    assert len(store.mr_violations("7:381")) == 4 and store.query(
+        "SELECT COUNT(*) n FROM violations WHERE scope='commit'")[0]["n"] == 4
+    # new commit, same problem: not commented again
+    s = cq.run(mr("h2"))
+    assert len(gl.discussions) == 1 and s["threads"]["open"] == 1 and not s["threads"]["fixed"]
+    # the developer replies "sudah" but the code is unchanged -> one short note per commit
+    gl.threads["d1"]["notes"].append({"body": "sudah fix pak", "author": {"username": "dewi"}})
+    cq.run(mr("h3"))
+    notes = gl.threads["d1"]["notes"]
+    assert "masih" in notes[-1]["body"] and "`h3`" in notes[-1]["body"]
+    cq.run(mr("h3"))
+    assert len(gl.threads["d1"]["notes"]) == len(notes), "tidak diulang di commit yang sama"
+    # the team fixes it: reply + resolve, reported back in the summary
+    gl.diff = GO_DIFF.replace('q := "SELECT * FROM t WHERE id=" + id', 'row := db.QueryRow("SELECT * FROM t WHERE id = $1", id)')
+    s = cq.run(mr("h4"))
+    assert gl.threads["d1"]["resolved"] and "Sudah" in gl.threads["d1"]["notes"][-1]["body"]
+    assert "`h4`" in gl.threads["d1"]["notes"][-1]["body"]
+    assert len(s["threads"]["fixed"]) == 1 and s["threads"]["open"] == 0 and len(gl.discussions) == 1
+    # the same code comes back later: it is a new problem, commented again
+    gl.diff = GO_DIFF
+    s = cq.run(mr("h5"))
+    assert len(gl.discussions) == 2
+
+
+def test_older_threads_from_my_account_are_followed_up():
+    cfg = std_cfg()
+    cfg["code_quality"]["ai_check"] = False
+    gl, store = QGL(), Store(":memory:")
+    store.kv_set("gitlab_user", "nova")
+    gl.threads["old1"] = {"notes": [{"body": "Masih ada fmt.Println di sini.", "author": {"username": "nova"},
+                                     "resolvable": True, "resolved": False,
+                                     "position": {"new_path": "internal/a/b.go", "new_line": 12, "head_sha": "old"}}]}
+    gl.threads["dev1"] = {"notes": [{"body": "pertanyaan", "author": {"username": "dewi"}, "resolvable": True,
+                                     "position": {"new_path": "internal/a/b.go", "new_line": 12, "head_sha": "old"}}]}
+    cq = CodeQuality(cfg, gl, store)
+    cq.run(mr())
+    assert not gl.threads["old1"].get("resolved") and len(gl.threads["old1"]["notes"]) == 1, "baris masih sama"
+    items = {t["id"]: t for t in cq.threads.load(7, 381)}
+    assert items["old1"]["adopted"] and "dev1" not in items, "thread orang lain tidak diambil alih"
+    gl.diff = GO_DIFF.replace("\tfmt.Println(data)\n", "\tlogger.Info(data)\n")
+    cq.run(mr("h2"))
+    assert gl.threads["old1"]["resolved"] and "`h2`" in gl.threads["old1"]["notes"][-1]["body"]
+
+
+def test_thread_resolved_by_a_person_is_left_alone():
     cfg = std_cfg()
     cfg["code_quality"]["ai_check"] = False
     gl, store = QGL(), Store(":memory:")
     cq = CodeQuality(cfg, gl, store)
-    s = cq.run(mr())
-    # 1 error (sql concat) + warnings: ignored error, fmt.Println; missing PR checklist is only info
-    assert s["counts"]["error"] == 1 and s["counts"]["warning"] == 2 and s["counts"]["info"] >= 1
-    # warnings posted ON the commit with file + line (info commit-message not posted: min severity warning)
-    lines = sorted((c[1], c[2]) for c in gl.commit_comments)
-    assert lines == [("internal/a/b.go", 11), ("internal/a/b.go", 12), ("internal/a/b.go", 13)]
-    assert all(c[0] == "c1" * 20 for c in gl.commit_comments)  # merge commit skipped
-    note = gl.notes[0]
-    assert "Perlu diperbaiki sebelum merge" in note and "`internal/a/b.go:13`" in note and "SQL injection" in note
-    assert "go-sql-concat" not in note and "|" not in note and "❌" not in note, "tanpa id aturan/tabel/emoji"
-    assert gl.statuses[0][1] == "success" and "1 error" in gl.statuses[0][3]
-    # second run: commit not re-commented, summary note edited instead of new
+    cq.run(mr())
+    gl.threads["d1"]["resolved"] = True  # lead/developer decided it's fine
+    n = len(gl.threads["d1"]["notes"])
     cq.run(mr("h2"))
-    assert len(gl.commit_comments) == 3 and len(gl.notes) == 1 and gl.edits[0][0] == "99"
-    assert len(store.mr_violations("7:381")) == 4  # 3 rules + checklist
-    assert store.query("SELECT COUNT(*) n FROM violations WHERE scope='commit'")[0]["n"] == 4
+    gl.diff = GO_DIFF.replace("SELECT", "UPSERT_NOT_SQL")
+    cq.run(mr("h3"))
+    assert len(gl.threads["d1"]["notes"]) == n and len(gl.discussions) == 1
+
+
+def test_warning_threshold_is_configurable():
+    cfg = std_cfg()
+    cfg["code_quality"]["ai_check"] = False
+    cfg["code_quality"]["report"]["min_severity_to_post"] = "warning"
+    gl = QGL()
+    CodeQuality(cfg, gl, Store(":memory:")).run(mr())
+    assert sorted(d[3]["new_line"] for d in gl.discussions) == [11, 12, 13]
 
 
 def test_status_fail_on_error():
@@ -211,18 +295,40 @@ class FakeAI:
         return self.reply, "fake"
 
 
-def test_ai_violations_filtered_and_posted():
+def test_ai_reports_only_errors_and_risks():
     cfg = std_cfg()
     ai = FakeAI(json.dumps({"violations": [
-        {"rule": "Handler akses repo langsung", "severity": "warning", "file": "internal/a/b.go", "line": 11,
-         "message": "Pindahkan ke usecase", "confidence": "high"},
+        {"rule": "Penamaan", "severity": "warning", "file": "internal/a/b.go", "line": 11,
+         "message": "Ganti nama data jadi user", "confidence": "high"},
+        {"rule": "Error handling", "severity": "risk", "file": "internal/a/b.go", "line": 11,
+         "message": "Sekarang belum error, tapi saat repo.Find gagal data jadi nil dan baris berikutnya panic.",
+         "confidence": "high"},
         {"rule": "ragu", "severity": "error", "file": "internal/a/b.go", "line": 12, "message": "x", "confidence": "low"}]}))
     gl = QGL()
     s = CodeQuality(cfg, gl, Store(":memory:"), ai=ai).run(mr())
     assert ai.calls == ["standards"]
-    ai = [v for v in s["top"] if v["source"] == "ai"]
-    assert len(ai) == 1 and ai[0]["rule"] == "Handler akses repo langsung"
-    assert len(gl.discussions) == 1
+    ai_v = [v for v in s["top"] if v["source"] == "ai"]
+    assert [v["rule"] for v in ai_v] == ["Error handling"], "gaya/penamaan dan yang ragu tidak dilaporkan"
+    bodies = [d[2] for d in gl.discussions]
+    assert any("panic" in b for b in bodies) and not any("Ganti nama" in b for b in bodies)
+    assert len(gl.discussions) == 2, "1 error aturan (SQL) + 1 risiko AI"
+
+
+def test_ai_thread_closed_only_when_its_code_changed():
+    cfg = std_cfg()
+    risk = {"rule": "Error handling", "severity": "risk", "file": "internal/a/b.go", "line": 11,
+            "message": "Saat repo.Find gagal, data nil lalu panic.", "confidence": "high"}
+    ai = FakeAI(json.dumps({"violations": [risk]}))
+    gl, store = QGL(), Store(":memory:")
+    cq = CodeQuality(cfg, gl, store, ai=ai)
+    cq.run(mr())
+    did = next(k for k, t in gl.threads.items() if "panic" in t["notes"][0]["body"])
+    ai.reply = json.dumps({"violations": []})  # AI is not deterministic: silent on the next commit
+    cq.run(mr("h2"))
+    assert not gl.threads[did].get("resolved"), "kode belum berubah: jangan dianggap beres"
+    gl.diff = GO_DIFF.replace("data, _ := repo.Find(id)", "data, err := repo.Find(id)\n+\tif err != nil { return }")
+    cq.run(mr("h3"))
+    assert gl.threads[did]["resolved"]
 
 
 def test_app_card_and_merge_confirm_with_quality_errors():

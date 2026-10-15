@@ -156,11 +156,13 @@ code_quality:
   ai_check: true                  # AI membandingkan diff dengan dokumen standar (.md); butuh review.llm.api_key
   ai_min_confidence: high         # hanya temuan AI yang yakin yang dipakai
   report:
-    commit_comments: ${COMMIT_COMMENTS:-true}   # warning diposting di COMMIT-nya (file + baris)
-    min_severity_to_post: warning # info tidak diposting, hanya tampil di dashboard/Telegram
-    max_comments_per_commit: 10
-    ai_inline_comments: true      # temuan AI jadi komentar inline di diff MR
-    mr_summary_note: true         # satu komentar ringkasan di MR, di-update setiap ada commit baru
+    commit_comments: ${COMMIT_COMMENTS:-true}   # komentari temuan di GitLab (thread di baris kodenya)
+    min_severity_to_post: error   # hanya error yang dikomentari; warning/info cukup di Telegram & dashboard
+    max_open_threads: 6           # maksimal thread terbuka per MR; sisanya cukup di Telegram/dashboard
+    ai_inline_comments: true      # temuan AI (error + risiko ke depan) jadi komentar di diff MR
+    ai_post_risks: true           # risiko yang diprediksi AI ikut dikomentari (bukan gaya/penamaan)
+    mr_summary_note: false        # true = tambah satu komentar ringkasan di MR
+    follow_up_existing: true      # thread lama dari akun Anda di MR juga dicek & ditutup saat barisnya diperbaiki
     commit_status: true           # status "code-standard" di commit terbaru
     status_name: code-standard
     status_fail_on: none          # none | error | warning. "error" = status merah jika ada error
