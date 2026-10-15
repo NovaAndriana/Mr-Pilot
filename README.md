@@ -103,6 +103,24 @@ python -m mr_pilot --dry-run    # cek MR tanpa kirim/merge apa pun
 
 **Saran yang bisa langsung di-Apply.** Tombol **💬 Kirim saran ke MR** di kartu memposting temuan AI sebagai komentar di baris kodenya. Kalau AI memberi kode pengganti, komentar berisi blok *suggestion* GitLab: developer tinggal klik **Apply suggestion**. Temuan yang tidak terbukti tidak dikirim, dan saran yang sama tidak diposting dua kali. `review.llm.post_findings: auto` = temuan blocker/major langsung diposting tanpa tombol.
 
+
+**Urutan merge antar-MR.** Setiap MR yang menunggu Anda dibandingkan dengan MR lain yang terbuka ke branch tujuan yang sama, termasuk MR yang bukan untuk Anda. MR Pilot mendeteksi:
+- **Branch bertumpuk:** branch MR B dibuat di atas branch MR A.
+- **Fungsi atau tipe baru:** MR B memakai fungsi/tipe yang baru dibuat di MR A.
+- **Fungsi yang dihapus atau diubah:** MR A menghapus, mengganti nama, atau mengubah signature fungsi yang dipakai kode baru di MR B.
+- **Migrasi:** nomor migrasi sama, atau nomornya harus berurutan.
+- **Versi dependency:** versi berbeda di `go.mod`/`package.json`, atau file lock berubah di keduanya.
+- **Baris yang sama:** perubahan di baris yang sama, yang akan conflict.
+- **Ketergantungan tertulis:** "depends on !12" atau "setelah !12" di deskripsi MR.
+
+Hasilnya:
+- **Kartu Telegram:** ada bagian *Urutan merge*, misalnya "Merge !12 dulu, baru !13".
+- **Tombol Merge:** meminta konfirmasi kalau urutannya salah (`merge.confirm_if_order`).
+- **Setelah ada MR yang di-merge:** Anda mendapat daftar MR yang kemungkinan error atau conflict, dan author-nya mendapat satu komentar untuk rebase (`merge_order.comment_on_affected`).
+- **Merge yang gagal:** pesan gagalnya menyebut MR mana yang masuk duluan dan apa yang berubah.
+- **Tindak lanjut:** begitu author menyesuaikan kodenya, komentar itu ditutup otomatis.
+
+Analisisnya hanya membaca data GitLab dan disimpan per commit, jadi tiap MR cukup dibaca sekali.
 ## 2. AI: provider, fallback, dan per tugas
 
 ### Cara AI mereview (lebih teliti, lebih sedikit temuan palsu)

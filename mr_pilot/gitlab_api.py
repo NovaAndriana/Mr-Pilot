@@ -66,6 +66,12 @@ class GitLab:
                     out.append(m)
         return out
 
+    def project_mrs(self, pid, target_branch=None, state="opened", max_pages=3):
+        params = {"state": state, "order_by": "updated_at", "sort": "desc"}
+        if target_branch:
+            params["target_branch"] = target_branch
+        return self.get_all(f"/projects/{_pid(pid)}/merge_requests", params, max_pages=max_pages)
+
     def get_mr(self, pid, iid):
         return self.get(f"/projects/{_pid(pid)}/merge_requests/{iid}")
 

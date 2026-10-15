@@ -220,7 +220,7 @@ def test_only_errors_are_commented_and_fixes_are_followed_up():
     # the team fixes it: reply + resolve, reported back in the summary
     gl.diff = GO_DIFF.replace('q := "SELECT * FROM t WHERE id=" + id', 'row := db.QueryRow("SELECT * FROM t WHERE id = $1", id)')
     s = cq.run(mr("h4"))
-    assert gl.threads["d1"]["resolved"] and "Sudah" in gl.threads["d1"]["notes"][-1]["body"]
+    assert gl.threads["d1"]["resolved"] and "sudah" in gl.threads["d1"]["notes"][-1]["body"].lower()
     assert "`h4`" in gl.threads["d1"]["notes"][-1]["body"]
     assert len(s["threads"]["fixed"]) == 1 and s["threads"]["open"] == 0 and len(gl.discussions) == 1
     # the same code comes back later: it is a new problem, commented again

@@ -68,6 +68,8 @@ class App:
         self.ai.notify = self.safe_send  # quota alerts (80% / exhausted) go to Telegram
         from .digest import Digest
         self.digest = Digest(cfg, self.store, self.safe_send)
+        from .merge_order import MergeOrder
+        self.order = MergeOrder(cfg, self.gl, self.store)
         # Security + DORA read lots of GitLab data: they run on a background thread with their own HTTP
         # session, so a long first sync never delays a Merge tap. Their Telegram messages are queued and
         # sent from the main loop.
@@ -407,6 +409,17 @@ class App:
                 quality = {"threads": th} if th.get("fixed") or th.get("open") else None
             except Exception as ex:
                 log.info("cek ulang komentar !%s: %s", iid, short_error(ex))
+        order = None
+        if self.order.enabled:
+            closed = self.order.followup(mr) if not self.dry else []
+            if closed:
+                self.event("fixed", f"!{iid} sudah disesuaikan setelah merge MR lain", "", key, "success")
+            order = self.order.check(mr)
+            if order is not None:
+                order["affected_by"] = self.order.affected_by(pid, iid)
+                if any(r["level"] == "high" for r in order["relations"]):
+                    self.event("order", f"!{iid}: perhatikan urutan merge",
+                               order["relations"][0]["reason"], key, "warning")
         if header is None:
             is_update = bool(rec and rec.get("tg_msg_id") and not same_sha)
             header = "🔄 MR diperbarui (ada commit baru)" if is_update else "🔔 MR baru untuk direview"
@@ -417,7 +430,7 @@ class App:
         if rec and rec.get("tg_msg_id") and rec.get("tg_text") and rec.get("status") not in ("notify_failed",):
             self.safe_edit(rec["tg_msg_id"], rec["tg_text"] + "\n\n<i>↪️ Diganti review terbaru di bawah.</i>")
         flags = heuristic_flags(mr, self.cfg) + list(review.get("flags") or [])
-        detail, text = build_messages(mr, review, flags, header, quality)
+        detail, text = build_messages(mr, review, flags, header, quality, order)
         if detail:
             self.safe_send(detail)
         pf_mode = self.cfg["review"]["llm"].get("post_findings", "manual")
@@ -441,6 +454,40 @@ class App:
             n, ok, _ = post_findings(self.gl, self.store, mr, review, severities=("blocker", "major"))
             if n:
                 self.event("review", f"{n} saran dikirim ke !{iid}", f"{ok} bisa langsung di-Apply", key)
+
+    def after_merge(self, mr):
+        """Another MR just landed: tell Nova (and the authors) which open MRs will now fail or conflict."""
+        if not self.order.enabled or self.dry:
+            return
+        try:
+            affected = self.order.after_merge(mr)
+        except Exception as ex:
+            log.warning("cek MR terdampak: %s", short_error(ex))
+            return
+        if not affected:
+            return
+        comment = (self.cfg.get("merge_order") or {}).get("comment_on_affected", True)
+        posted = self.order.record_affected(mr, affected, comment=comment)
+        lines = [f"🔀 <b>!{mr['iid']} sudah di-merge ke <code>{e(mr.get('target_branch'))}</code>.</b> "
+                 f"MR berikut kemungkinan error/conflict sekarang:"]
+        for a in affected[:6]:
+            lines.append(f"• <a href=\"{e(a['web_url'], True)}\">!{a['iid']}</a> {e(a['title'])}"
+                         + (f" ({e(a['author'])})" if a.get("author") else ""))
+            for r in a["relations"][:2]:
+                lines.append(f"   {e(r['reason'])}")
+        if posted:
+            lines.append(f"<i>{posted} author sudah saya beri tahu lewat komentar di MR-nya untuk rebase.</i>")
+        self.safe_send("\n".join(lines))
+        for a in affected:
+            self.event("order", f"!{a['iid']} terdampak merge !{mr['iid']}",
+                       a["relations"][0]["reason"], mr_key(a["project_id"], a["iid"]), "warning")
+
+    def _order_hint(self, pid, iid):
+        info = self.order.affected_by(pid, iid) if self.order.enabled else None
+        if not info:
+            return ""
+        return (f"\n🔀 Kemungkinan karena !{info['merged']} ({e(info.get('merged_title') or '')}) sudah di-merge "
+                f"duluan: " + e("; ".join(info.get("reasons") or [])[:400]))
 
     def _threads_event(self, iid, key, th):
         if th and th.get("fixed"):
@@ -467,6 +514,8 @@ class App:
                 continue  # draft / filtered: keep as is
             self.store.upsert(key, status="merged" if state == "merged" else "closed", decided_at=time.time())
             self.event("closed", f"!{rec['iid']} {state} di luar MR Pilot", rec.get("title") or "", key)
+            if state == "merged":
+                self.after_merge(mr)
             if rec.get("tg_text"):
                 self._finish_card(rec, f"<i>ℹ️ MR sudah {e(state)} di luar MR Pilot ({now_str()}).</i>")
 
@@ -628,6 +677,13 @@ class App:
             if "masih" in reason:
                 self.store.kv_set(f"wait_green:{key}", 1)
             return
+        if mcfg.get("confirm_if_order", True) and self.order.enabled and not confirmed:
+            od = self.order.check(mr) or {}
+            from .merge_order import must_wait
+            for r in must_wait(od.get("relations") or [], iid)[:2]:
+                reasons.append(f"Urutan merge: !{r['first']} sebaiknya di-merge dulu ({r['reason']})")
+            for r in [x for x in od.get("relations") or [] if x["first"] is None and x["level"] == "high"][:2]:
+                reasons.append(f"Bentrok dengan !{r['other']}: {r['reason']}")
         # blocking checks first, then ask: no point confirming a merge that cannot happen yet
         if reasons and not confirmed:
             self.safe_send(f"<b>!{iid}</b> " + "\n".join(e(r) for r in reasons) + "\nYakin tetap merge?",
@@ -691,8 +747,9 @@ class App:
                             405: "MR belum bisa di-merge (approval wajib, diskusi belum resolved, atau draft)",
                             406: "ada conflict / branch tidak bisa di-merge", 409: "SHA berubah, ada commit baru",
                             422: "branch tidak bisa di-merge"}.get(r.status_code, "")
+                    why = self._order_hint(pid, iid)
                     self.safe_send(f"⛔ Merge !{iid} gagal (HTTP {r.status_code}): {e(msg)}"
-                                   + (f"\n<i>{e(hint)}</i>" if hint else ""))
+                                   + (f"\n<i>{e(hint)}</i>" if hint else "") + why)
                     self.event("error", f"Merge !{iid} gagal", f"HTTP {r.status_code}: {msg}", key, "error")
                     return
 
@@ -709,6 +766,7 @@ class App:
             self.event("merged", f"!{iid} di-merge ke {mr['target_branch']}",
                        f"{mr.get('title')} · {teams_line}", key, "success")
             log.info("MR %s merged; teams=%s", key, status)
+        self.after_merge({**mr, **{k: v for k, v in body.items() if k in ("merge_commit_sha", "state")}})
 
     def send_suggestions(self, rec):
         pid, iid = rec["project_id"], rec["iid"]
