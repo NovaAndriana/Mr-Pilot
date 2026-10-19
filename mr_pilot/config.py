@@ -61,6 +61,7 @@ DEFAULTS = {
         "confirm_if_quality_errors": True,
         "confirm_if_security": True,
         "confirm_if_order": True,
+        "confirm_if_open_threads": True,
     },
     "merge_order": {"enabled": True, "max_mrs": 30, "comment_on_affected": True},
     "security": {"enabled": True, "projects": [], "branch": "", "interval_minutes": 30, "mr_check": True,

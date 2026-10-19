@@ -249,6 +249,19 @@ def test_older_threads_from_my_account_are_followed_up():
     assert gl.threads["old1"]["resolved"] and "`h2`" in gl.threads["old1"]["notes"][-1]["body"]
 
 
+def test_open_threads_for_merge_guard():
+    cfg = std_cfg()
+    cfg["code_quality"]["ai_check"] = False
+    gl, store = QGL(), Store(":memory:")
+    cq = CodeQuality(cfg, gl, store)
+    cq.run(mr())
+    op = cq.threads.open_threads(7, 381)
+    assert len(op) == 1 and "SQL" in op[0]["message"]
+    gl.threads["d1"]["resolved"] = True  # someone resolved it in GitLab
+    assert cq.threads.open_threads(7, 381) == []
+    assert cq.threads.load(7, 381)[0]["status"] == "resolved"
+
+
 def test_thread_resolved_by_a_person_is_left_alone():
     cfg = std_cfg()
     cfg["code_quality"]["ai_check"] = False

@@ -161,6 +161,29 @@ def test_parse_bot_review():
     assert "solid" in r["summary"]
 
 
+AGENTIC_BOT = """## 🤖 AI Code Review (Agentic Mode)
+Perfect. Now I have enough context to perform the review.
+### ✅ Correctness & Logic
+1. **ProductPrice.NetAmount()** — Perhitungan diskon benar.
+### ⚠️ BLOCKER: Migration Timestamp Collision
+**Masalah**: file migrasi lama dinamai ulang.
+### 📝 Minor Findings (Non-Blocking)
+1. **Line 50**: alias tidak diperlukan.
+## 🚫 FINAL VERDICT
+**REJECT** — Migration renaming menimbulkan risiko collision dan violate best practice.
+Jika migration naming bisa diresolve, semua aspek lainnya adalah **PASS**.
+"""
+
+
+def test_parse_agentic_bot_final_verdict():
+    r = parse_bot_review(AGENTIC_BOT)
+    assert r["verdict"] == "REQUEST_CHANGES", "REJECT di FINAL VERDICT"
+    assert r["summary"].startswith("Migration renaming")
+    assert [f["severity"] for f in r["findings"]] == ["blocker"], "judul 'Minor Findings (Non-Blocking)' bukan temuan"
+    ok = parse_bot_review(AGENTIC_BOT.replace("**REJECT**", "**APPROVE**").replace("### ⚠️ BLOCKER: Migration Timestamp Collision\n", ""))
+    assert ok["verdict"] == "APPROVE"
+
+
 def test_normalize_downgrades_approve_with_major():
     raw = '```json\n{"verdict":"approve","summary":"x","findings":[{"severity":"major","title":"t"}]}\n```'
     r = normalize(extract_json(raw), "llm")

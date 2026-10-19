@@ -225,7 +225,7 @@ def build_system_prompt(language, extra_rules, standards=""):
 
 # --------------------------------------------------------- bot comment parse
 _FINDING_RE = re.compile(r"(BLOCKER|CRITICAL|KRITIS|MAJOR|KECIL|MINOR|⚠️|🔴|❌)", re.I)
-_SKIP_RE = re.compile(r"\bAREA\b|✓|✅|DITERIMA|PASSED|\bSTATUS\b|minor note", re.I)
+_SKIP_RE = re.compile(r"\bAREA\b|✓|✅|DITERIMA|PASSED|\bSTATUS\b|minor note|non[- ]?blocking|minor findings", re.I)
 _GOOD_HDR_RE = re.compile(r"(highlights?|kelebihan|strengths?|poin positif|yang sudah bagus)\s*\**\s*:?", re.I)
 _LIST_RE = re.compile(r"\s*(?:\d+[.)]|[-*•])\s+")
 
@@ -236,10 +236,17 @@ def _clean(s):
     return re.sub(r"\s+", " ", s).strip(" -•:")
 
 
+_FINAL_RE = re.compile(r"(?:FINAL\s+)?VERDICT\b[^\n\w]*\n?[^\w\n]*(REJECT(?:ED)?|REQUEST(?:ED)?[ _]CHANGES|CHANGES[ _]REQUESTED|"
+                       r"APPROVED?|NEEDS?[ _]ATTENTION|PASS(?:ED)?|LGTM)\b[^\w\n]*([^\n]*)", re.I)
+
+
 def parse_bot_review(body):
     up = body.upper()
     status_m = re.search(r"STATUS\s*[:\-]?\s*[^\w\n]*\s*([A-Z _]+)", up)
     status = status_m.group(1).strip() if status_m else ""
+    final = _FINAL_RE.search(body)  # "## FINAL VERDICT\n**REJECT** — ..." (agentic bot format)
+    if final and not status:
+        status = final.group(1).upper()
     if "REQUEST" in status or "CHANGES" in status or "REJECT" in status:
         verdict = "REQUEST_CHANGES"
     elif "APPROV" in status:
@@ -266,6 +273,8 @@ def parse_bot_review(body):
                 break
             lines.append(l)
         summary = _clean(" ".join(lines[:4]))[:600]
+    if not summary and final and final.group(2).strip():
+        summary = _clean(final.group(2))[:600]
 
     # good points: list under "Highlights:" (or similar); fallback to accepted lines
     hm = _GOOD_HDR_RE.search(body)
@@ -288,13 +297,13 @@ def parse_bot_review(body):
 
     findings = []
     for line in body.splitlines():
-        mm = _FINDING_RE.search(line)
-        if not mm:
+        tags = {t.upper() for t in _FINDING_RE.findall(line)}
+        if not tags:
             continue
-        tag = mm.group(1).upper()
-        if tag in ("BLOCKER", "CRITICAL", "KRITIS", "🔴", "❌"):
+        # most severe tag wins ("⚠️ BLOCKER: ..." is a blocker, not a minor warning)
+        if tags & {"BLOCKER", "CRITICAL", "KRITIS", "🔴", "❌"}:
             sev = "blocker"
-        elif tag == "MAJOR":
+        elif "MAJOR" in tags:
             sev = "major"
         else:
             sev = "minor"

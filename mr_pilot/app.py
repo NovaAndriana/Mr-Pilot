@@ -649,6 +649,16 @@ class App:
         q_err = ((rec.get("quality") or {}).get("counts") or {}).get("error", 0)
         if mcfg.get("confirm_if_quality_errors") and q_err:
             reasons.append(f"Standar kode: ❌ {q_err} error")
+        if mcfg.get("confirm_if_open_threads", True) and not confirmed:
+            try:
+                op = self.quality.threads.open_threads(pid, iid)
+            except Exception as ex:
+                log.info("cek thread terbuka !%s: %s", iid, short_error(ex))
+                op = []
+            if op:
+                first = (op[0].get("message") or op[0].get("title") or "").strip()
+                reasons.append(f"Masih ada {len(op)} catatan error/risiko di GitLab yang belum diperbaiki"
+                               + (f", mis. {first[:120]}" if first else ""))
         sec = self.security.mr_result(pid, iid, rec.get("sha"))
         if mcfg.get("confirm_if_security", True) and sec and sec.get("serious"):
             reasons.append(f"Keamanan: temuan baru dari MR ini ({sec['summary']})")

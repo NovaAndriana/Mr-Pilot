@@ -72,6 +72,7 @@ merge:
   confirm_if_quality_errors: true # minta konfirmasi kedua jika ada error standar kode
   confirm_if_security: true       # minta konfirmasi kedua jika MR membawa secret / temuan keamanan high+ baru
   confirm_if_order: true          # minta konfirmasi kedua jika ada MR lain yang harus di-merge duluan
+  confirm_if_open_threads: true   # minta konfirmasi kedua jika komentar error/risiko dari MR Pilot belum diperbaiki
 
 merge_order:
   # Bandingkan MR dengan MR lain yang terbuka ke branch tujuan yang sama: branch bertumpuk, fungsi baru yang
