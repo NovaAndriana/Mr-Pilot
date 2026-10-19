@@ -166,6 +166,10 @@ Checklist (cek yang relevan dengan file yang berubah):
 - TypeScript/React/React Native: deps useEffect/useMemo salah, state dimutasi langsung, promise tanpa catch,
   `any` di batas API, key list, dangerouslySetInnerHTML, re-render berat, kebocoran listener/timer.
 - Data & DB: migrasi tidak backward-compatible, index hilang untuk query baru, N+1, query di dalam loop, pagination.
+  golang-migrate hanya menjalankan versi DI ATAS versi yang sudah tercatat, menolak folder dengan versi ganda, dan
+  tidak butuh nomor berurutan rapat (gap itu normal). Seed tanpa ON CONFLICT gagal kalau datanya sudah ada.
+  DROP kolom/tabel merusak pod versi lama saat rolling deploy. Respons API yang jadi kosong/nol untuk data baru
+  (mis. produk baru di seed) membuat aplikasi versi lama salah tampil walau secara teknis bukan breaking change.
 - Konkurensi & idempotensi: retry ganda, double submit, update tanpa kondisi.
 - Test: logika baru/berubah tanpa test, test yang tidak menguji apa-apa, assertion keliru.
 
@@ -175,6 +179,8 @@ Kalibrasi severity:
 - minor: maintainability/kejelasan yang layak diperbaiki. Gaya, format, dan selera pribadi TIDAK dilaporkan.
 
 Aturan keras:
+- Baca deskripsi MR. Kalau alasan sebuah perubahan sudah dijelaskan di sana dan masuk akal, jangan laporkan itu
+  sebagai masalah; laporkan hanya kalau penjelasannya keliru, dan sebutkan kenapa keliru.
 - Setiap temuan WAJIB punya "evidence": salin PERSIS 1-3 baris kode dari diff/file (tanpa nomor baris).
   Kalau tidak bisa menunjuk barisnya, jangan laporkan.
 - "line" = nomor baris di file BARU (angka di kiri diff / isi file).

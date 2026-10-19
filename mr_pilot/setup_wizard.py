@@ -96,6 +96,9 @@ _MIGRATIONS = [
     (re.compile(r"^(\s*)commit_comments:\s*\$\{COMMIT_COMMENTS:-true\}\s*#\s*warning diposting di COMMIT-nya \(file \+ baris\)\s*$",
                 re.M),
      r"\1commit_comments: ${COMMIT_COMMENTS:-true}   # komentari temuan di GitLab (thread di baris kodenya)"),
+    (re.compile(r"^(\s*)max_open_threads:\s*6\s*# maksimal thread terbuka per MR; sisanya cukup di Telegram/dashboard\s*$",
+                re.M),
+     r"\1max_open_threads: 3           # maksimal thread terbuka per MR; sisanya cukup di Telegram/dashboard"),
     (re.compile(r'^(\s*)comment_footer:\s*"Pengecekan standar kode otomatis"\s*$', re.M),
      r'\1comment_footer: ""            # teks kecil di bawah komentar GitLab; kosong = tanpa footer'),
 ]

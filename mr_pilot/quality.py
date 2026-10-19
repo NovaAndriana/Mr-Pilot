@@ -5,7 +5,7 @@ import time
 
 import requests
 
-from . import voice
+from . import migrations, voice
 from .ai import AIManager
 from .threads import ThreadTracker, line_text
 from .util import short_error
@@ -102,6 +102,8 @@ class CodeQuality:
         # 2) current state of the whole MR (what would land if merged)
         diffs = self.gl.get_diffs(pid, iid)
         current = self.std.check_diffs(diffs, self.ignore)
+        if self.cfg.get("migration_checks", True):
+            current += migrations.check(diffs)
         current += self.std.check_title(mr.get("title"), mr.get("source_branch"))
         current += self.std.check_checklist(mr.get("description"))
 
@@ -260,7 +262,7 @@ class CodeQuality:
     def _post_threads(self, mr, current, paths):
         # cap on threads open at the same time on one MR: the rest stays on Telegram/dashboard, and is only
         # commented after earlier ones are fixed (no trickle of new comments on every re-check)
-        limit = int(self.report.get("max_open_threads", self.report.get("max_comments_per_run", 6)))
+        limit = int(self.report.get("max_open_threads", self.report.get("max_comments_per_run", 3)))
         open_items = self.threads.load(mr["project_id"], mr["iid"])
         n_open = sum(1 for t in open_items if t.get("status") == "open")
         n = 0

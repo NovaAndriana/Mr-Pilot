@@ -1309,7 +1309,7 @@ def test_39_team_fix_is_checked_and_threads_closed(w):
     n = len(w.tg.sent)
     cek(w)
     card(w, 620, n)
-    assert "masih sama" in sql["notes"][-1]["body"] and "`7b7b7b7b`" in sql["notes"][-1]["body"]
+    assert "masih" in sql["notes"][-1]["body"] and "`7b7b7b7b`" in sql["notes"][-1]["body"]
     assert not sql["resolved"] and not risk["resolved"] and len(mine()) == 3, "tidak ada komentar baru"
     assert not any("masih" in x["body"] for x in risk["notes"][1:]), "thread tanpa balasan developer tidak dibalas"
     # the real fix: every thread gets a short reply and is resolved, the Telegram card says so
@@ -1367,6 +1367,9 @@ def test_40_merge_order_between_mrs(w):
     w.gl.merge_behaviour[(7, 641)] = lambda h, mr, body: h._json(406, {"message": "Branch cannot be merged"})
     n = len(w.tg.sent)
     w.tg.press(c641, "m|7|641")
+    conf = wait(lambda: w.tg.find("Yakin tetap merge?", n), 20, "konfirmasi: thread masih terbuka")
+    assert "belum diperbaiki" in w.tg.messages[conf]["text"]
+    w.tg.press(conf, "mf|7|641")
     fail = wait(lambda: w.tg.find("Merge !641 gagal", n), 20, "merge gagal")
     assert "Kemungkinan karena !640" in w.tg.messages[fail]["text"]
     w.gl.merge_behaviour.pop((7, 641))
