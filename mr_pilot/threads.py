@@ -118,6 +118,32 @@ class ThreadTracker:
         self._save(pid, iid, items)
         return {"inline": inline}
 
+    def open_threads(self, pid, iid, refresh=True):
+        """Threads MR Pilot opened (not adopted ones) that are still open. refresh=True re-reads GitLab, so a
+        thread a person resolved meanwhile no longer counts."""
+        items = self.load(pid, iid)
+        out = []
+        changed = False
+        for t in items:
+            if t.get("status") != "open" or t.get("adopted"):
+                continue
+            if refresh and t.get("id"):
+                try:
+                    d = self.gl.get_discussion(pid, iid, t["id"])
+                    if any(n.get("resolved") for n in d.get("notes") or [] if n.get("resolvable")):
+                        t.update(status="resolved", closed_at=time.time())
+                        changed = True
+                        continue
+                except Exception as ex:
+                    if "404" in str(ex):
+                        t.update(status="gone", closed_at=time.time())
+                        changed = True
+                        continue
+            out.append(t)
+        if changed:
+            self._save(pid, iid, items)
+        return out
+
     # ----------------------------------------------------------- reconcile
     def reconcile(self, mr, diffs, current=None, ai_ok=False, adopt=True):
         """Re-check open threads after a new commit. current = findings of the current code (rule/ai items);

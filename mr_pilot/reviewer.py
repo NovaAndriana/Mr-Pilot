@@ -166,6 +166,10 @@ Checklist (cek yang relevan dengan file yang berubah):
 - TypeScript/React/React Native: deps useEffect/useMemo salah, state dimutasi langsung, promise tanpa catch,
   `any` di batas API, key list, dangerouslySetInnerHTML, re-render berat, kebocoran listener/timer.
 - Data & DB: migrasi tidak backward-compatible, index hilang untuk query baru, N+1, query di dalam loop, pagination.
+  golang-migrate hanya menjalankan versi DI ATAS versi yang sudah tercatat, menolak folder dengan versi ganda, dan
+  tidak butuh nomor berurutan rapat (gap itu normal). Seed tanpa ON CONFLICT gagal kalau datanya sudah ada.
+  DROP kolom/tabel merusak pod versi lama saat rolling deploy. Respons API yang jadi kosong/nol untuk data baru
+  (mis. produk baru di seed) membuat aplikasi versi lama salah tampil walau secara teknis bukan breaking change.
 - Konkurensi & idempotensi: retry ganda, double submit, update tanpa kondisi.
 - Test: logika baru/berubah tanpa test, test yang tidak menguji apa-apa, assertion keliru.
 
@@ -175,6 +179,8 @@ Kalibrasi severity:
 - minor: maintainability/kejelasan yang layak diperbaiki. Gaya, format, dan selera pribadi TIDAK dilaporkan.
 
 Aturan keras:
+- Baca deskripsi MR. Kalau alasan sebuah perubahan sudah dijelaskan di sana dan masuk akal, jangan laporkan itu
+  sebagai masalah; laporkan hanya kalau penjelasannya keliru, dan sebutkan kenapa keliru.
 - Setiap temuan WAJIB punya "evidence": salin PERSIS 1-3 baris kode dari diff/file (tanpa nomor baris).
   Kalau tidak bisa menunjuk barisnya, jangan laporkan.
 - "line" = nomor baris di file BARU (angka di kiri diff / isi file).
@@ -225,7 +231,7 @@ def build_system_prompt(language, extra_rules, standards=""):
 
 # --------------------------------------------------------- bot comment parse
 _FINDING_RE = re.compile(r"(BLOCKER|CRITICAL|KRITIS|MAJOR|KECIL|MINOR|⚠️|🔴|❌)", re.I)
-_SKIP_RE = re.compile(r"\bAREA\b|✓|✅|DITERIMA|PASSED|\bSTATUS\b|minor note", re.I)
+_SKIP_RE = re.compile(r"\bAREA\b|✓|✅|DITERIMA|PASSED|\bSTATUS\b|minor note|non[- ]?blocking|minor findings", re.I)
 _GOOD_HDR_RE = re.compile(r"(highlights?|kelebihan|strengths?|poin positif|yang sudah bagus)\s*\**\s*:?", re.I)
 _LIST_RE = re.compile(r"\s*(?:\d+[.)]|[-*•])\s+")
 
@@ -236,10 +242,17 @@ def _clean(s):
     return re.sub(r"\s+", " ", s).strip(" -•:")
 
 
+_FINAL_RE = re.compile(r"(?:FINAL\s+)?VERDICT\b[^\n\w]*\n?[^\w\n]*(REJECT(?:ED)?|REQUEST(?:ED)?[ _]CHANGES|CHANGES[ _]REQUESTED|"
+                       r"APPROVED?|NEEDS?[ _]ATTENTION|PASS(?:ED)?|LGTM)\b[^\w\n]*([^\n]*)", re.I)
+
+
 def parse_bot_review(body):
     up = body.upper()
     status_m = re.search(r"STATUS\s*[:\-]?\s*[^\w\n]*\s*([A-Z _]+)", up)
     status = status_m.group(1).strip() if status_m else ""
+    final = _FINAL_RE.search(body)  # "## FINAL VERDICT\n**REJECT** — ..." (agentic bot format)
+    if final and not status:
+        status = final.group(1).upper()
     if "REQUEST" in status or "CHANGES" in status or "REJECT" in status:
         verdict = "REQUEST_CHANGES"
     elif "APPROV" in status:
@@ -266,6 +279,8 @@ def parse_bot_review(body):
                 break
             lines.append(l)
         summary = _clean(" ".join(lines[:4]))[:600]
+    if not summary and final and final.group(2).strip():
+        summary = _clean(final.group(2))[:600]
 
     # good points: list under "Highlights:" (or similar); fallback to accepted lines
     hm = _GOOD_HDR_RE.search(body)
@@ -288,13 +303,13 @@ def parse_bot_review(body):
 
     findings = []
     for line in body.splitlines():
-        mm = _FINDING_RE.search(line)
-        if not mm:
+        tags = {t.upper() for t in _FINDING_RE.findall(line)}
+        if not tags:
             continue
-        tag = mm.group(1).upper()
-        if tag in ("BLOCKER", "CRITICAL", "KRITIS", "🔴", "❌"):
+        # most severe tag wins ("⚠️ BLOCKER: ..." is a blocker, not a minor warning)
+        if tags & {"BLOCKER", "CRITICAL", "KRITIS", "🔴", "❌"}:
             sev = "blocker"
-        elif tag == "MAJOR":
+        elif "MAJOR" in tags:
             sev = "major"
         else:
             sev = "minor"

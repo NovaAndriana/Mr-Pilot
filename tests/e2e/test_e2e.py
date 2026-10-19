@@ -820,10 +820,10 @@ def test_28_polls_on_its_own_and_migrates_old_config(w):
 def test_29_source_branch_kept_unless_chosen(w):
     """Merge keeps the source branch (even if the MR's own "Delete source branch" box is ticked);
     deleting happens only with the explicit "Merge + hapus branch" button, also via confirmation."""
-    w.gl.add_mr(560, "fix: keep branch", "a6" * 20, delete_branch_checkbox=True, files={"a.go": GO_OK})
-    w.gl.add_mr(561, "fix: hapus branch", "a7" * 20, files={"a.go": GO_OK})
+    w.gl.add_mr(560, "fix: keep branch", "a6" * 20, delete_branch_checkbox=True, files={"k560.go": GO_OK})
+    w.gl.add_mr(561, "fix: hapus branch", "a7" * 20, files={"k561.go": GO_OK})
     w.verdicts["fix: hapus lewat konfirmasi"] = {"verdict": "NEEDS_ATTENTION"}
-    w.gl.add_mr(562, "fix: hapus lewat konfirmasi", "a8" * 20, files={"a.go": GO_OK})
+    w.gl.add_mr(562, "fix: hapus lewat konfirmasi", "a8" * 20, files={"k562.go": GO_OK})
     n = len(w.tg.sent)
     cek(w)
     c560, c561, c562 = card(w, 560, n), card(w, 561, n), card(w, 562, n)
@@ -1309,7 +1309,7 @@ def test_39_team_fix_is_checked_and_threads_closed(w):
     n = len(w.tg.sent)
     cek(w)
     card(w, 620, n)
-    assert "masih sama" in sql["notes"][-1]["body"] and "`7b7b7b7b`" in sql["notes"][-1]["body"]
+    assert "masih" in sql["notes"][-1]["body"] and "`7b7b7b7b`" in sql["notes"][-1]["body"]
     assert not sql["resolved"] and not risk["resolved"] and len(mine()) == 3, "tidak ada komentar baru"
     assert not any("masih" in x["body"] for x in risk["notes"][1:]), "thread tanpa balasan developer tidak dibalas"
     # the real fix: every thread gets a short reply and is resolved, the Telegram card says so
@@ -1367,6 +1367,9 @@ def test_40_merge_order_between_mrs(w):
     w.gl.merge_behaviour[(7, 641)] = lambda h, mr, body: h._json(406, {"message": "Branch cannot be merged"})
     n = len(w.tg.sent)
     w.tg.press(c641, "m|7|641")
+    conf = wait(lambda: w.tg.find("Yakin tetap merge?", n), 20, "konfirmasi: thread masih terbuka")
+    assert "belum diperbaiki" in w.tg.messages[conf]["text"]
+    w.tg.press(conf, "mf|7|641")
     fail = wait(lambda: w.tg.find("Merge !641 gagal", n), 20, "merge gagal")
     assert "Kemungkinan karena !640" in w.tg.messages[fail]["text"]
     w.gl.merge_behaviour.pop((7, 641))

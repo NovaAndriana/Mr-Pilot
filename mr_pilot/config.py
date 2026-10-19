@@ -61,6 +61,7 @@ DEFAULTS = {
         "confirm_if_quality_errors": True,
         "confirm_if_security": True,
         "confirm_if_order": True,
+        "confirm_if_open_threads": True,
     },
     "merge_order": {"enabled": True, "max_mrs": 30, "comment_on_affected": True},
     "security": {"enabled": True, "projects": [], "branch": "", "interval_minutes": 30, "mr_check": True,
@@ -88,6 +89,7 @@ DEFAULTS = {
             "require_pr_checklist": "warn_unchecked",
         },
         "ai_check": True,
+        "migration_checks": True,     # golang-migrate checks (pair, duplicate version, rename, seed, DROP)
         "ai_min_confidence": "high",
         "ai_max_violations": 8,
         "ai_max_diff_chars": 60000,
@@ -96,7 +98,7 @@ DEFAULTS = {
             "post_on": "mr",               # mr = resolvable MR threads (followed up) | commit = old commit comments
             "min_severity_to_post": "error",
             "max_comments_per_commit": 10,
-            "max_open_threads": 6,
+            "max_open_threads": 3,
             "ai_inline_comments": True,
             "ai_post_risks": True,         # AI "risk" findings (predicted future problems) are posted too
             "mr_summary_note": False,

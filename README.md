@@ -169,7 +169,19 @@ MR Pilot hanya berkomentar di GitLab untuk dua hal:
 - **Error:** sesuatu yang pasti bermasalah sekarang. Contohnya aturan level `error` (SQL injection, secret di kode, dan sejenisnya), atau bug, celah keamanan, dan kontrak API yang rusak yang ditemukan AI.
 - **Risiko ke depan:** belum error hari ini, tapi diprediksi jadi masalah. Contohnya error yang tidak ditangani, request tanpa autentikasi, atau query yang akan lambat saat data besar. AI menuliskan kapan dan bagaimana masalahnya akan muncul.
 
-Penamaan, gaya, panjang file, `console.log`, `any`, key index, dan sejenisnya **tidak** dikomentari di GitLab. Semua itu tetap terlihat di kartu Telegram dan dashboard. Saran review level minor juga tidak dikirim. Maksimal ada 6 thread terbuka per MR (`max_open_threads`), dan tidak ada komentar ringkasan (`mr_summary_note: false`).
+Penamaan, gaya, panjang file, `console.log`, `any`, key index, dan sejenisnya **tidak** dikomentari di GitLab. Semua itu tetap terlihat di kartu Telegram dan dashboard. Saran review level minor juga tidak dikirim. Maksimal ada 3 thread terbuka per MR (`max_open_threads`), dan tidak ada komentar ringkasan (`mr_summary_note: false`).
+
+**Migrasi database (golang-migrate).** Hanya dua hal yang dikomentari di GitLab karena pasti error:
+- file `.up` tanpa pasangan `.down` (atau sebaliknya);
+- dua migrasi dengan nomor versi yang sama.
+
+Yang lain cukup jadi catatan di kartu Telegram Anda:
+- migrasi yang dinomori ulang (cek apakah versi lamanya sudah pernah jalan);
+- migrasi lama yang isinya diubah (tidak akan jalan lagi di environment yang sudah menjalankannya);
+- seed `INSERT` tanpa `ON CONFLICT` (gagal dan membuat DB *dirty* kalau datanya sudah ada);
+- `DROP` kolom/tabel (merusak pod versi lama saat rolling deploy).
+
+**Merge ditahan sebentar** (minta konfirmasi) kalau masih ada komentar error/risiko dari MR Pilot yang belum diperbaiki atau di-resolve (`merge.confirm_if_open_threads`). Verdict bot review format baru (`FINAL VERDICT: REJECT`) juga dibaca sebagai *Request changes*.
 
 **Tindak lanjut otomatis setiap ada commit baru dari tim:**
 - **Sudah diperbaiki:** MR Pilot membalas singkat, misalnya "Sudah diperbaiki di `abc12345`, thanks!", lalu menutup (*resolve*) thread-nya. Kartu Telegram menampilkan "✅ N catatan sudah diperbaiki".
