@@ -198,6 +198,38 @@ class Standards:
                               why="Format ini dipakai untuk changelog dan supaya MR gampang dicari dari nomor tiketnya.")]
         return []
 
+    def check_branch(self, branch):
+        """Branch name convention (info only: a branch can't be renamed on an open MR)."""
+        pat = (self.cfg.get("conventions") or {}).get("branch_name_pattern")
+        if not pat or not branch or re.search(pat, branch):
+            return []
+        hint = suggest_branch(branch)
+        msg = f"Nama branch `{branch}` belum ikut format `type/TIKET-deskripsi`"
+        msg += f", misalnya `{hint}` untuk MR berikutnya." if hint else ", contohnya `feat/IDAS-123-quota-bundle`."
+        return [violation("branch-name-convention", "info", msg, source="convention", snippet=branch)]
+
+    def check_size(self, diffs):
+        """Big MRs are hard to review: info when the changed lines (lock/generated/mock files excluded) pass the limit."""
+        conv = self.cfg.get("conventions") or {}
+        limit = int(conv.get("max_mr_lines") or 0)
+        if limit <= 0:
+            return []
+        skip = conv.get("size_exclude") or []
+        total = 0
+        for d in diffs or []:
+            path = d.get("new_path") or d.get("old_path") or ""
+            if any_match(path, skip):
+                continue
+            for line in (d.get("diff") or "").splitlines():
+                if line[:1] in "+-" and not line.startswith(("+++", "---")):
+                    total += 1
+        if total <= limit:
+            return []
+        return [violation("mr-too-large", "info",
+                          f"MR ini mengubah {total} baris (di luar lock file, mock, dan file generate), di atas batas {limit}. "
+                          "Kalau bisa, pecah per langkah yang tetap bisa jalan sendiri.",
+                          source="convention", snippet=f"size:{total // 100}")]
+
     def check_commit_message(self, message):
         conv = self.cfg.get("conventions") or {}
         pat = conv.get("commit_message_pattern")
@@ -285,6 +317,18 @@ def suggest_title(title, branch=None):
             continue
         return f"{kind or 'feat'}({ticket}): {' '.join(words).lower()}"
     return None
+
+
+def suggest_branch(branch):
+    """'IDAS-5327/fix-role-signature' -> 'fix/IDAS-5327-role-signature'."""
+    t = suggest_title(None, branch)
+    if not t:
+        return None
+    m = re.match(r"^(\w+)\(([A-Z0-9-]+)\): (.+)$", t)
+    if not m:
+        return None
+    slug = re.sub(r"[^a-z0-9]+", "-", m.group(3).lower()).strip("-")[:40].strip("-")
+    return f"{m.group(1)}/{m.group(2)}-{slug}" if slug else None
 
 
 def _norm(s):

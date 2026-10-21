@@ -211,9 +211,18 @@ Semua ada di folder **`standards/`**. Bisa diedit langsung, atau lewat **dashboa
 | `general.md` | Standar umum: naming, error handling, logging, secret, git convention | AI |
 | `go.md`, `react.md`, `react-native.md` | Standar per stack | AI, sesuai stack file yang diubah |
 | `pr-checklist.md` | Checklist PR yang wajib ada di deskripsi MR | Cek otomatis |
+| `merge_request_template.md` | Template deskripsi MR tim. Salin ke `.gitlab/merge_request_templates/Default.md` di tiap repo, lalu jadikan default di *Settings → Merge requests* | Cek checklist & urutan merge (`Harus di-merge setelah: !123`) |
 | `rules.yaml` | Aturan regex yang dicek di **setiap baris yang ditambahkan** | Cek otomatis per commit |
 | `ci/gitlab-ci-quality.yml` | Contoh job CI untuk gofmt, go vet, golangci-lint, ESLint, dan tsc | Salin ke repo |
 | `ci/gitlab-ci-security.yml` | GitLab SAST + Secret Detection (lihat bagian 3a) | Salin ke repo |
+
+Isi file ini mengikuti dokumen *Standar Kode & Template MR AkuSign*: aturan **Wajib** memblokir merge, **Disarankan** dibahas saat review.
+
+Saat `setup.bat update`, file di `data/standards/` yang **belum pernah diubah** otomatis diganti versi terbaru (salinan lama disimpan sebagai `.bak`), file baru ditambahkan, dan file yang sudah diedit tim **tidak disentuh**.
+
+Konvensi tambahan di `code_quality.conventions` (dicatat sebagai info di Telegram/dashboard, tidak dikomentari di GitLab):
+- `branch_name_pattern`: nama branch `type/TIKET-deskripsi` atau `TIKET/deskripsi`.
+- `max_mr_lines`: MR yang mengubah lebih banyak baris dari ini (di luar lock file, mock, dan file generate). Default 2500, sama dengan template MR tim saat ini.
 
 Stack ditentukan dari path file (`code_quality.stacks`). Sesuaikan `paths` dengan struktur repo Anda, misalnya `web/**` untuk FE.
 

@@ -164,6 +164,8 @@ code_quality:
     commit_message_severity: info
     pr_checklist: pr-checklist.md
     require_pr_checklist: warn_unchecked   # warn_unchecked = kotak di checklist MR harus dicentang | present | match_template | off
+    branch_name_pattern: '^((feat|fix|refactor|perf|test|docs|chore|ci|build|revert|hotfix|release)/[A-Za-z][A-Za-z0-9]+-\d+|[A-Za-z][A-Za-z0-9]+-\d+/)'   # type/TIKET-x atau TIKET/x; kosong = mati
+    max_mr_lines: 2500                     # MR lebih besar dari ini dicatat (info, tidak dikomentari); 0 = mati
   ai_check: true                  # AI membandingkan diff dengan dokumen standar (.md); butuh review.llm.api_key
   ai_min_confidence: high         # hanya temuan AI yang yakin yang dipakai
   report:

@@ -91,6 +91,24 @@ rules:
     fix: Baca sekali di package config saat start, lalu teruskan nilainya lewat struct config.
     exclude_paths: ["*config*/**", "*config*.go", "cmd/**", "*_test.go"]
 
+  - id: go-http-no-timeout
+    stacks: [go]
+    severity: warning
+    pattern: '\bhttp\.(Get|Post|PostForm|Head)\(|\bhttp\.DefaultClient\b|&?http\.Client\{\s*\}'
+    message: HTTP call ini memakai client tanpa timeout.
+    why: Kalau layanan tujuan lambat atau tidak menjawab, request ini menunggu tanpa batas dan goroutine serta koneksinya ikut tertahan, lama-lama service kehabisan resource.
+    fix: "Pakai client dengan timeout, misalnya `client := &http.Client{Timeout: 10 * time.Second}`, atau `http.NewRequestWithContext(ctx, ...)` lewat client proyek."
+    exclude_paths: ["*_test.go"]
+
+  - id: go-context-background
+    stacks: [go]
+    severity: info
+    pattern: '\bcontext\.(Background|TODO)\(\)'
+    message: Ada context.Background() / context.TODO() baru di sini.
+    why: Di tengah alur request, context baru memutus timeout dan pembatalan dari request asal, jadi query atau HTTP call tetap jalan walau client sudah pergi.
+    fix: Teruskan `ctx` dari parameter fungsi. Context baru hanya untuk startup, worker, atau job yang memang berdiri sendiri.
+    exclude_paths: ["*_test.go", "cmd/**", "main.go", "**/main.go"]
+
   # ---------------- React / React Native (TypeScript)
   - id: ts-no-console
     stacks: [react, react-native]
@@ -132,6 +150,33 @@ rules:
     message: Ada dangerouslySetInnerHTML di sini.
     why: Kalau isinya berasal dari input user atau API, script di dalamnya bisa ikut dijalankan di browser (XSS).
     fix: "Sanitasi dulu isinya, misalnya `dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html) }}`, atau render sebagai teks biasa kalau tidak butuh HTML."
+
+  - id: ts-localstorage-token
+    stacks: [react]
+    severity: warning
+    pattern: '(?i)(localStorage|sessionStorage)\.setItem\(\s*["''`][^"''`]*(token|password|secret)'
+    message: Token disimpan di localStorage.
+    why: Semua script yang jalan di halaman bisa membaca localStorage, jadi satu celah XSS cukup untuk mencuri sesi user.
+    fix: Ikuti mekanisme auth yang sudah ada (cookie httpOnly kalau tersedia). Kalau memang harus di browser, simpan di memori dan pakai refresh token dari cookie.
+
+  - id: react-div-onclick
+    stacks: [react]
+    severity: info
+    pattern: '<(div|span)\b[^>]*\sonClick='
+    message: Elemen yang bisa diklik di sini memakai div/span.
+    why: Div tidak bisa difokus dengan keyboard dan tidak dibaca sebagai tombol oleh screen reader.
+    fix: Pakai `<button type="button">` atau `<a>`, lalu atur tampilannya dengan CSS.
+    exclude_paths: ["*.test.*", "*.spec.*", "*.stories.*"]
+
+  - id: ts-raw-fetch-in-component
+    stacks: [react, react-native]
+    severity: info
+    pattern: '\b(fetch|axios\.(get|post|put|patch|delete|request))\('
+    message: Request API dipanggil langsung dari komponen.
+    why: Base URL, auth header, refresh token, dan penanganan error jadi tidak seragam, dan setiap perubahan di API client tidak ikut berlaku di sini.
+    fix: Pindahkan ke service fitur (`features/<fitur>/services`) yang memakai API client di `src/api`, lalu panggil lewat hook.
+    paths: ["**/components/**", "**/screens/**", "**/pages/**"]
+    exclude_paths: ["*.test.*", "*.spec.*", "*.stories.*"]
 
   - id: hardcoded-url
     stacks: [react, react-native]

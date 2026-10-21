@@ -87,6 +87,10 @@ DEFAULTS = {
             "commit_message_severity": "info",
             "pr_checklist": "pr-checklist.md",
             "require_pr_checklist": "warn_unchecked",
+            "branch_name_pattern": r"^((feat|fix|refactor|perf|test|docs|chore|ci|build|revert|hotfix|release)/[A-Za-z][A-Za-z0-9]+-\d+|[A-Za-z][A-Za-z0-9]+-\d+/)",
+            "max_mr_lines": 2500,      # info di Telegram/dashboard kalau MR lebih besar (0 = mati)
+            "size_exclude": ["*.lock", "go.sum", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "**/mocks/**",
+                             "**/mock_*.go", "*.pb.go", "*_gen.go", "**/generated/**", "*.snap", "*.svg"],
         },
         "ai_check": True,
         "migration_checks": True,     # golang-migrate checks (pair, duplicate version, rename, seed, DROP)
