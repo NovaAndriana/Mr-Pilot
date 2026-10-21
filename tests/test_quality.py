@@ -77,9 +77,9 @@ def test_conventions_and_checklist():
     assert std.check_commit_message("update stuff")[0]["severity"] == "info"
     assert not std.check_commit_message("Merge branch 'staging' into feat/x")
     assert std.check_checklist("no checklist")[0]["rule"] == "pr-checklist-missing"
-    desc = "## Pull Request Checklist\n- [x] Code follows coding standard\n- [ ] Unit test added/updated\n"
+    desc = "## Checklist\n- [x] Kode mengikuti standar tim (BE / FE / Mobile)\n- [ ] Unit test ditambah atau diperbarui\n"
     vs = std.check_checklist(desc)
-    assert [v["rule"] for v in vs] == ["pr-checklist-unchecked"] and "Unit test added/updated" in vs[0]["message"]
+    assert [v["rule"] for v in vs] == ["pr-checklist-unchecked"] and "Unit test ditambah" in vs[0]["message"]
     # match_template: also every item of standards/pr-checklist.md must be present
     std.cfg["conventions"]["require_pr_checklist"] = "match_template"
     rules = {v["rule"] for v in std.check_checklist(desc)}
@@ -187,7 +187,7 @@ class QGL:
 
 def mr(sha="h1"):
     return {"project_id": 7, "iid": 381, "sha": sha, "title": "fix: reject workflow", "description": "",
-            "references": {"full": "idas/be!381"}, "web_url": "https://x/381", "source_branch": "fix/x",
+            "references": {"full": "idas/be!381"}, "web_url": "https://x/381", "source_branch": "fix/IDAS-381-reject",
             "diff_refs": {"base_sha": "b", "start_sha": "s", "head_sha": sha}}
 
 

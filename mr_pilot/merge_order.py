@@ -35,6 +35,7 @@ _DEP_FILES = re.compile(r"(^|/)(go\.mod|package\.json|requirements[\w.-]*\.txt|p
 _LOCK_FILES = re.compile(r"(^|/)(go\.sum|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Podfile\.lock|poetry\.lock)$")
 _GO_REQ = re.compile(r"^\s*(?:require\s+)?([\w.\-/]+\.[\w.\-/]+)\s+(v[\w.\-+]+)")
 _JSON_DEP = re.compile(r'^\s*"(@?[\w.\-/]+)"\s*:\s*"((?:[~^]|>=?)?\d[\w.\-+]*|\*|latest)"')
+_COMMENT = re.compile(r"<!--.*?-->", re.S)  # template hints, e.g. "contoh !123"
 _DEPENDS = re.compile(r"(?i)(?:depends?\s+on|requires?|after|setelah|tunggu|butuh|blocked\s+by|"
                       r"merge\s+(?:dulu|duluan|setelah))\s*:?\s*!(\d+)")
 _COMMON = {"func", "return", "const", "type", "string", "error", "true", "false", "null", "this", "self", "import",
@@ -129,7 +130,7 @@ def analyze(diffs, commits=(), description=""):
         "deps": deps,
         "locks": sorted(set(locks)),
         "commits": [c.get("id") for c in commits or [] if c.get("id")][:300],
-        "depends_on": sorted({int(x) for x in _DEPENDS.findall(description or "")}),
+        "depends_on": sorted({int(x) for x in _DEPENDS.findall(_COMMENT.sub(" ", description or ""))}),
     }
 
 

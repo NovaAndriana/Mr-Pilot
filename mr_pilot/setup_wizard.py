@@ -107,23 +107,65 @@ _MIGRATIONS = [
 _OLD_RULES_SHA = {"26a24536fc3cd5eeffa10937ee05caccb790091c89211eee6d2853dfb44ca930"}
 
 
+def _sha(data):
+    import hashlib
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
+def _shipped():
+    """{relative path: [sha256 of every version we ever shipped]} (mr_pilot/standards_shipped.json)."""
+    import json
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "standards_shipped.json"),
+                  encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    data.setdefault("rules.yaml", [])
+    data["rules.yaml"] = list(set(data["rules.yaml"]) | _OLD_RULES_SHA)
+    return data
+
+
+def migrate_standards(std_dir, src_dir=None):
+    """Bring the data folder's standards/ up to the bundled version, file by file:
+    missing file -> copied; untouched copy of an older version -> replaced (old one kept as .bak);
+    a file the team edited -> left alone. Returns the relative paths that changed."""
+    src_dir = src_dir or os.path.join(PKG_ROOT, "standards")
+    if not os.path.isdir(src_dir) or not os.path.isdir(std_dir) or os.path.abspath(src_dir) == os.path.abspath(std_dir):
+        return []
+    shipped, changed = _shipped(), []
+    for root, _, files in os.walk(src_dir):
+        for name in files:
+            src = os.path.join(root, name)
+            rel = os.path.relpath(src, src_dir).replace(os.sep, "/")
+            dst = os.path.join(std_dir, *rel.split("/"))
+            try:
+                with open(src, "rb") as f:
+                    new = f.read()
+                if not os.path.exists(dst):
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.copy(src, dst)
+                    changed.append(rel)
+                    continue
+                with open(dst, "rb") as f:
+                    cur = _sha(f.read())
+                if cur == _sha(new) or cur not in shipped.get(rel, []):
+                    continue  # already current, or edited by the team: leave it alone
+                shutil.copy(dst, dst + ".bak")
+                shutil.copy(src, dst + ".tmp")
+                os.replace(dst + ".tmp", dst)
+                changed.append(rel)
+            except OSError:
+                continue  # read-only mount: the copy in the data folder stays as it is
+    return changed
+
+
 def migrate_rules(std_dir):
     """Replace an unmodified old rules.yaml with the bundled one (keeps rules.yaml.bak). True if upgraded."""
-    import hashlib
-    dst, src = os.path.join(std_dir, "rules.yaml"), os.path.join(PKG_ROOT, "standards", "rules.yaml")
-    if not os.path.exists(dst) or not os.path.exists(src) or os.path.abspath(dst) == os.path.abspath(src):
+    dst = os.path.join(std_dir, "rules.yaml")
+    if not os.path.exists(dst):
         return False
-    try:
-        with open(dst, "rb") as f:
-            old = f.read()
-        if hashlib.sha256(old.replace(b"\r\n", b"\n")).hexdigest() not in _OLD_RULES_SHA:
-            return False  # edited by the user: leave it alone
-        shutil.copy(dst, dst + ".bak")
-        shutil.copy(src, dst + ".tmp")
-        os.replace(dst + ".tmp", dst)
-        return True
-    except OSError:
-        return False
+    return "rules.yaml" in migrate_standards(std_dir)
 
 
 def migrate_config(path):
@@ -165,8 +207,9 @@ def bootstrap_data_dir(data_dir):
     if not os.path.exists(std) and os.path.isdir(src_std) and os.path.abspath(src_std) != os.path.abspath(std):
         shutil.copytree(src_std, std)
         created.append("standards/")
-    elif migrate_rules(std):
-        created.append("standards/rules.yaml (diperbarui, salinan lama: rules.yaml.bak)")
+    else:
+        for rel in migrate_standards(std):
+            created.append(f"standards/{rel} (diperbarui)")
     if os.path.exists("/.dockerenv") or os.environ.get("MRP_IN_DOCKER") == "1":
         os.makedirs(os.path.join(data_dir, "home"), exist_ok=True)  # $HOME for Claude Code in the container
     return created
@@ -438,3 +481,28 @@ def run_doctor(cfg, test_ai=True):
     say("Semua siap." if not fails else f"{fails} masalah. Perbaiki lalu jalankan doctor lagi.",
         "ok" if not fails else "bad")
     return 1 if fails else 0
+
+
+def record_standards():
+    """Developer helper before a release: add the sha256 of every bundled standards/ file to
+    standards_shipped.json, so older untouched copies in users' data folders get upgraded."""
+    import json
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "standards_shipped.json")
+    data = _shipped()
+    src_dir = os.path.join(PKG_ROOT, "standards")
+    for root, _, files in os.walk(src_dir):
+        for name in files:
+            p = os.path.join(root, name)
+            rel = os.path.relpath(p, src_dir).replace(os.sep, "/")
+            with open(p, "rb") as f:
+                h = _sha(f.read())
+            if h not in data.setdefault(rel, []):
+                data[rel].append(h)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({k: sorted(v) for k, v in sorted(data.items())}, f, indent=1)
+        f.write("\n")
+    return path
+
+
+if __name__ == "__main__" and "--record-standards" in sys.argv:
+    print(record_standards())

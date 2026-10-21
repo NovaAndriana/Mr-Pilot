@@ -219,8 +219,6 @@ class ThreadTracker:
         snippet_present = bool(t.get("snippet")) and code is not None and norm(t["snippet"]) in code
         if t["source"] == "order":
             return None  # followed up by MergeOrder.followup (needs the merged MR's analysis)
-        if t["source"] == "order":
-            return None  # followed up by MergeOrder.followup (needs the merged MR's analysis)
         if t["source"] == "review":
             if not t.get("snippet"):
                 return None

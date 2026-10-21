@@ -105,6 +105,8 @@ class CodeQuality:
         if self.cfg.get("migration_checks", True):
             current += migrations.check(diffs)
         current += self.std.check_title(mr.get("title"), mr.get("source_branch"))
+        current += self.std.check_branch(mr.get("source_branch"))
+        current += self.std.check_size(diffs)
         current += self.std.check_checklist(mr.get("description"))
 
         # 3) AI check against the written standards (only for a new head sha)

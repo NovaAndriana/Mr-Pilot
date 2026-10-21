@@ -1,23 +1,20 @@
-## Pull Request Checklist
-
+## Checklist
 ### Code Quality
-- [ ] Code follows coding standard
-- [ ] No unnecessary complexity
-- [ ] No duplicated code
-- [ ] Error handling implemented
-- [ ] Logging implemented where necessary
+- [ ] Kode mengikuti standar tim (BE / FE / Mobile)
+- [ ] Tidak ada kode duplikat, kode mati, atau log debug
+- [ ] Error handling dan logging sesuai standar
 
 ### Testing
-- [ ] Unit test added/updated
-- [ ] Existing tests passed
-- [ ] Edge cases considered
+- [ ] Unit test ditambah atau diperbarui
+- [ ] Semua test lulus
+- [ ] Edge case sudah dipertimbangkan
 
 ### Security
-- [ ] No secret/API key committed
-- [ ] Input validation implemented
-- [ ] Sensitive information protected
+- [ ] Tidak ada secret / API key yang ter-commit
+- [ ] Validasi input sudah ada
+- [ ] Data sensitif terlindungi
 
 ### Review
-- [ ] Self review completed
-- [ ] Reviewer assigned
-- [ ] CI passed
+- [ ] Self review sudah dilakukan
+- [ ] Reviewer sudah di-assign
+- [ ] CI hijau
