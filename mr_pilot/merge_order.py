@@ -29,7 +29,7 @@ _DEFS = [
 _IDENT = re.compile(r"\b[A-Za-z_$][\w$]{3,}\b")
 _COMMENT = re.compile(r"^\s*(//|#|\*|/\*)")
 _MIGRATION_DIR = re.compile(r"(^|/)(migrations?|migrate|db/migrat\w*|schema)/", re.I)
-_MIGRATION_VER = re.compile(r"^(\d{3,14})[_\-.]")
+_MIGRATION_VER = re.compile(r"^(\d{3,20})[_\-.]")
 _DEP_FILES = re.compile(r"(^|/)(go\.mod|package\.json|requirements[\w.-]*\.txt|pyproject\.toml|pom\.xml|"
                         r"build\.gradle(\.kts)?|Podfile|pubspec\.yaml)$")
 _LOCK_FILES = re.compile(r"(^|/)(go\.sum|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Podfile\.lock|poetry\.lock)$")

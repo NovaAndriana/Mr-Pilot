@@ -103,7 +103,7 @@ class CodeQuality:
         diffs = self.gl.get_diffs(pid, iid)
         current = self.std.check_diffs(diffs, self.ignore)
         if self.cfg.get("migration_checks", True):
-            current += migrations.check(diffs)
+            current += migrations.check(diffs, self._migration_tree(mr, diffs), mr.get("target_branch") or "")
         current += self.std.check_title(mr.get("title"), mr.get("source_branch"))
         current += self.std.check_branch(mr.get("source_branch"))
         current += self.std.check_size(diffs)
@@ -260,6 +260,21 @@ class CodeQuality:
         return {"source": "ai" if v.get("source") == "ai" else ("rule" if v.get("source") == "rule" else v.get("source")),
                 "path": v.get("path"), "line": v.get("line"), "rule": v.get("rule"), "snippet": v.get("snippet"),
                 "severity": v.get("severity"), "message": (v.get("message") or "")[:200]}
+
+    def _migration_tree(self, mr, diffs):
+        """{folder: [file names on the target branch]} for folders where this MR adds a migration."""
+        folders = {(d.get("new_path") or "").rsplit("/", 1)[0] for d in diffs or []
+                   if (d.get("new_file") or d.get("renamed_file")) and "/" in (d.get("new_path") or "")
+                   and migrations.MIGRATION_DIR.search(d.get("new_path") or "")}
+        if not folders or not hasattr(self.gl, "repo_tree") or not mr.get("target_branch"):
+            return {}
+        out = {}
+        for f in sorted(folders)[:3]:
+            try:
+                out[f] = self.gl.repo_tree(mr["project_id"], f, mr["target_branch"])
+            except Exception as ex:  # folder new on this branch, or no access: skip the order check
+                log.info("daftar migration %s di %s: %s", f, mr.get("target_branch"), short_error(ex))
+        return out
 
     def _post_threads(self, mr, current, paths):
         # cap on threads open at the same time on one MR: the rest stays on Telegram/dashboard, and is only

@@ -92,6 +92,11 @@ class GitLab:
         r.encoding = r.encoding or "utf-8"
         return r.text
 
+    def repo_tree(self, pid, path, ref):
+        """File names directly inside `path` at `ref` (branch / sha)."""
+        items = self.get_all(f"/projects/{_pid(pid)}/repository/tree", {"path": path, "ref": ref}, max_pages=30)
+        return [i.get("name") for i in items if i.get("type") == "blob"]
+
     def mr_pipelines(self, pid, iid):
         """Pipelines of an MR, newest first."""
         return self.get(f"/projects/{_pid(pid)}/merge_requests/{iid}/pipelines", {"per_page": 5})

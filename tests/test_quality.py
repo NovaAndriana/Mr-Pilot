@@ -452,3 +452,27 @@ def test_dashboard_password_and_network_guard():
         assert _req(base + "/api/summary", headers={"Cookie": "mrp_session=123.abc"})[0] == 401
     finally:
         srv.shutdown()
+
+
+def test_non_idempotent_migration_gets_one_thread_and_closes_when_fixed():
+    cfg = std_cfg()
+    cfg["code_quality"]["ai_check"] = False
+    gl, store = QGL(), Store(":memory:")
+    store.kv_set("gitlab_user", "nova")
+    path = "migration/20261020185200001-alter_company_add_username.sql"
+    bad = "@@ -0,0 +1,4 @@\n+-- +migrate Up\n+alter table companys add username varchar(100);\n+-- +migrate Down\n+x;\n"
+    good = bad.replace("add username", "add column if not exists username")
+    state = {"diff": bad}
+    gl.get_diffs = lambda pid, iid: [{"new_path": path, "old_path": path, "new_file": True, "diff": state["diff"]}]
+    gl.get_commit_diff = lambda pid, sha: []
+    gl.repo_tree = lambda pid, folder, ref: ["20261001000000001-a.sql"]
+    cq = CodeQuality(cfg, gl, store)
+    cq.run(mr())
+    assert len(gl.discussions) == 1
+    body, pos = gl.discussions[0][2], gl.discussions[0][3]
+    assert pos["new_path"] == path and pos["new_line"] == 2
+    assert "ADD COLUMN IF NOT EXISTS" in body and "dirty" in body and "idempotent:" not in body
+    state["diff"] = good
+    cq.run(mr("h2"))
+    did = next(iter(gl.threads))
+    assert gl.threads[did].get("resolved") and len(gl.discussions) == 1
