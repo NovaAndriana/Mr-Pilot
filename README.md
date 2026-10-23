@@ -171,14 +171,14 @@ MR Pilot hanya berkomentar di GitLab untuk dua hal:
 
 Penamaan, gaya, panjang file, `console.log`, `any`, key index, dan sejenisnya **tidak** dikomentari di GitLab. Semua itu tetap terlihat di kartu Telegram dan dashboard. Saran review level minor juga tidak dikirim. Maksimal ada 3 thread terbuka per MR (`max_open_threads`), dan tidak ada komentar ringkasan (`mr_summary_note: false`).
 
-**Migrasi database (golang-migrate).** Hanya dua hal yang dikomentari di GitLab karena pasti error:
-- file `.up` tanpa pasangan `.down` (atau sebaliknya);
-- dua migrasi dengan nomor versi yang sama.
+**Migrasi database (golang-migrate dan sql-migrate).** Yang dikomentari di GitLab hanya yang membuat job migration gagal atau perubahannya tidak masuk ke database:
+- migration baru yang **tidak aman dijalankan ulang**: `ADD COLUMN` / `CREATE TABLE` / `CREATE INDEX` tanpa `IF NOT EXISTS`, `DROP` tanpa `IF EXISTS`, `INSERT` tanpa `ON CONFLICT`, `CREATE TYPE` di luar blok `DO`. Kalau perubahannya sudah ada di staging (misalnya ditambah manual), migration gagal dan status DB jadi *dirty*. Satu komentar per file, berisi daftar barisnya;
+- golang-migrate: versi **lebih kecil** dari migration terakhir di branch tujuan (dilewati diam-diam), file `.up` tanpa pasangan `.down`, dan nomor versi ganda (termasuk yang sudah ada di branch tujuan);
+- sql-migrate: file tanpa `-- +migrate Up`, blok `$$` tanpa `StatementBegin`/`StatementEnd`, dan `CREATE INDEX CONCURRENTLY` di dalam transaksi.
 
-Yang lain cukup jadi catatan di kartu Telegram Anda:
+Komentarnya ditutup otomatis setelah file diperbaiki. Yang lain cukup jadi catatan di kartu Telegram Anda:
 - migrasi yang dinomori ulang (cek apakah versi lamanya sudah pernah jalan);
 - migrasi lama yang isinya diubah (tidak akan jalan lagi di environment yang sudah menjalankannya);
-- seed `INSERT` tanpa `ON CONFLICT` (gagal dan membuat DB *dirty* kalau datanya sudah ada);
 - `DROP` kolom/tabel (merusak pod versi lama saat rolling deploy).
 
 **Merge ditahan sebentar** (minta konfirmasi) kalau masih ada komentar error/risiko dari MR Pilot yang belum diperbaiki atau di-resolve (`merge.confirm_if_open_threads`). Verdict bot review format baru (`FINAL VERDICT: REJECT`) juga dibaca sebagai *Request changes*.

@@ -56,7 +56,7 @@ def standard_comment(v, inline=True, footer=""):
     if not inline and where:
         lead = f"Di {where}: {_first_lower(lead) if sev != 'info' else lead}"
     snippet = ""
-    if not inline and v.get("snippet") and v.get("source") != "ai":
+    if not inline and v.get("snippet") and v.get("source") != "ai" and not str(v.get("rule") or "").startswith("migration-"):
         snippet = f"```\n{v['snippet']}\n```"
     close = _pick(_CLOSE_ERROR, *seed) if sev == "error" else ""
     return _join(lead, snippet, humanize(v.get("why")), v.get("fix"), close) + _footer(footer)
