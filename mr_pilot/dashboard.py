@@ -317,9 +317,23 @@ class Dashboard:
         self.data = DashboardData(cfg, store)
         self.files = StandardsFiles(cfg)
         self.store = store
+        self._delivery = None
         self.httpd = None
         self.failed = {}            # ip -> [timestamps of failed logins]
         self.fail_lock = threading.Lock()
+
+    @property
+    def delivery(self):
+        """Delivery report; its own GitLab session (only used to fill in details of older MRs)."""
+        if self._delivery is None:
+            from .delivery import Delivery
+            gl = None
+            g = self.cfg.get("gitlab") or {}
+            if g.get("url") and g.get("token"):
+                from .gitlab_api import GitLab
+                gl = GitLab(g["url"], g["token"], verify=g.get("verify_ssl", True))
+            self._delivery = Delivery(self.cfg, self.store, self.ai, gl)
+        return self._delivery
 
     LOCK_MAX, LOCK_WINDOW = 10, 900  # 10 wrong passwords per 15 minutes per address
 
@@ -481,7 +495,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if u.path in ("/", "/index.html"):
                 return self._static("index.html", "text/html; charset=utf-8")
-            if u.path in ("/security", "/dora"):
+            if u.path in ("/security", "/dora", "/delivery"):
                 return self._static(u.path[1:] + ".html", "text/html; charset=utf-8")
             if u.path == "/static/app.css":
                 return self._static("app.css", "text/css; charset=utf-8")
@@ -496,6 +510,8 @@ class _Handler(BaseHTTPRequestHandler):
                 p = (q.get("project") or [""])[0]
                 return self._send(200, insights.dora_data(self.app.cfg, self.app.store, self._qint(q, "days", 30, 7, 365),
                                                           int(p) if p.isdigit() else None))
+            if u.path in ("/api/delivery", "/api/delivery.docx", "/api/delivery.txt"):
+                return self._delivery_get(u.path, q)
             if u.path == "/api/summary":
                 return self._send(200, self.app.data.summary())
             if u.path == "/api/quality":
@@ -597,6 +613,8 @@ class _Handler(BaseHTTPRequestHandler):
                 which = "sec" if "security" in u.path else "dora"
                 self.app.store.kv_set(f"{which}_sync_request", time.time())
                 return self._send(202, {"ok": True, "message": "Sinkronisasi dijadwalkan, biasanya selesai dalam 1 menit."})
+            if u.path.startswith("/api/delivery/"):
+                return self._delivery_mutate(method, u.path, body)
             if method == "POST" and u.path == "/api/standards/test":
                 return self._send(200, self.app.files.test(body.get("path"), body.get("code")))
         except (ValueError, TypeError, KeyError) as ex:  # bad input from the form: answer 400, no traceback
@@ -606,6 +624,59 @@ class _Handler(BaseHTTPRequestHandler):
             log.exception("dashboard %s %s", method, u.path)
             return self._send(500, {"error": redact(ex)[:300]})
         self._send(404, {"error": "not found"})
+
+    # ------------------------------------------------------------ delivery
+    @staticmethod
+    def _period_args(q):
+        kind = (q.get("period") or ["this_week"])[0]
+        if kind not in ("this_week", "last_week", "this_month", "last_month", "custom"):
+            kind = "this_week"
+        frm, to = (q.get("from") or [""])[0], (q.get("to") or [""])[0]
+        for v in (frm, to):
+            if v and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+                raise ValueError("tanggal harus YYYY-MM-DD")
+        if kind == "custom" and not frm:
+            kind = "this_week"
+        return kind, frm or None, to or None
+
+    def _delivery_get(self, path, q):
+        try:
+            kind, frm, to = self._period_args(q)
+        except ValueError as ex:
+            return self._send(400, {"error": str(ex)})
+        dl = self.app.delivery
+        rep = dl.build(kind, frm, to)
+        if path.endswith(".docx"):
+            name = f"laporan-delivery-{rep['period']['from']}_{rep['period']['to']}.docx"
+            return self._send(200, dl.docx(rep),
+                              "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                              {"Content-Disposition": f'attachment; filename="{name}"'})
+        if path.endswith(".txt"):
+            return self._send(200, dl.text(rep, html=False), "text/plain; charset=utf-8")
+        return self._send(200, rep)
+
+    def _delivery_mutate(self, method, path, body):
+        dl = self.app.delivery
+        if method == "PUT" and path == "/api/delivery/team":
+            members = dl.save_team(body.get("members") or [])
+            self.app.store.add_event("delivery", "Anggota tim diperbarui", f"{len(members)} orang")
+            return self._send(200, {"members": members})
+        if method == "PUT" and path == "/api/delivery/mode":
+            dl.set_mode(str(body.get("mode") or ""), body.get("label_prefix"))
+            return self._send(200, {"mode": dl.mode(), "label_prefix": dl.label_prefix()})
+        if method == "POST" and path == "/api/delivery/override":
+            key = str(body.get("key") or "")
+            if not re.fullmatch(r"\d+:\d+", key):
+                raise ValueError("key MR tidak valid")
+            return self._send(200, dl.set_override(key, body.get("group"), body.get("kind")))
+        if method == "POST" and path == "/api/delivery/rename":
+            dl.rename_group(body.get("old"), body.get("new"))
+            return self._send(200, {"ok": True})
+        if method == "POST" and path == "/api/delivery/regroup":
+            q = {k: [str(v)] for k, v in body.items() if v}
+            kind, frm, to = self._period_args(q)
+            return self._send(200, dl.build(kind, frm, to, regroup=True))
+        return self._send(404, {"error": "not found"})
 
     def _stream(self, after):
         self.send_response(200)

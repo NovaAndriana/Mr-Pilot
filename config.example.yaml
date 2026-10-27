@@ -74,6 +74,21 @@ merge:
   confirm_if_order: true          # minta konfirmasi kedua jika ada MR lain yang harus di-merge duluan
   confirm_if_open_threads: true   # minta konfirmasi kedua jika komentar error/risiko dari MR Pilot belum diperbaiki
 
+delivery:
+  # Laporan pekerjaan tim untuk atasan: per tim (BE/FE/Mobile/QA) -> per orang -> per fitur -> MR-nya.
+  # Hanya MR yang masuk ke Anda (yang tercatat di MR Pilot). Lihat dashboard -> Delivery tim.
+  enabled: true
+  group_by: ai                    # ai = AI mengelompokkan (bisa diedit di dashboard) | label | milestone | ticket
+  label_prefix: ""                # untuk group_by label: hanya label berawalan ini, mis. "feature::"
+  include_open: true              # tampilkan juga MR yang masih berjalan
+  weekly_telegram: true           # ringkasan mingguan ke Telegram
+  weekly_day: fri                 # mon | tue | wed | thu | fri | sat | sun
+  weekly_time: "16:00"
+  team: []                        # bisa diisi dari dashboard; contoh:
+  #  - {username: septyan, name: Mas Septyan, team: BE}
+  #  - {username: arfandy, name: Mas Arfandy, team: BE}
+  teams_order: [BE, FE, Mobile, QA]
+
 merge_order:
   # Bandingkan MR dengan MR lain yang terbuka ke branch tujuan yang sama: branch bertumpuk, fungsi baru yang
   # dipakai MR lain, fungsi yang dihapus/diubah padahal dipakai MR lain, nomor migrasi, versi dependency,

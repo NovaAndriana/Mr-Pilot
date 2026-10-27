@@ -11,7 +11,8 @@ _BASE_COLS = ["project_id", "iid", "sha", "title", "web_url", "status", "review"
 _EXTRA_COLS = {"project": "TEXT", "author": "TEXT", "author_username": "TEXT",
                "source_branch": "TEXT", "target_branch": "TEXT", "verdict": "TEXT",
                "pipeline": "TEXT", "quality": "TEXT", "decided_at": "REAL", "mr_created_at": "TEXT",
-               "notified_at": "REAL"}
+               "notified_at": "REAL", "labels": "TEXT", "milestone": "TEXT", "description": "TEXT",
+               "merged_at": "TEXT"}
 COLUMNS = _BASE_COLS + list(_EXTRA_COLS)  # one source of truth: new columns are added to _EXTRA_COLS only
 
 

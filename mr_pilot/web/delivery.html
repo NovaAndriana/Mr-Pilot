@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delivery tim · MR Pilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  [hidden] { display:none !important; }
+  #f-period { max-width:100%; overflow-x:auto; } #f-period button { white-space:nowrap; }
+  .team-ed table { min-width:560px; }
+  .dl-tiles { display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:12px; margin:20px 0 24px; }
+  @media (max-width: 860px) { .dl-tiles { grid-template-columns:repeat(2, minmax(0,1fr)); } }
+  .team-h { display:flex; align-items:baseline; gap:12px; margin:28px 0 10px; }
+  .team-h h2 { margin:0; font-size:18px; }
+  .person { background:var(--surface); border:1px solid var(--line); border-radius:12px; margin-bottom:12px; }
+  .person-h { display:flex; align-items:baseline; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .person-h b { font-size:15px; }
+  .grp { padding:10px 16px 12px; border-top:1px solid var(--line); }
+  .grp:first-of-type { border-top:0; }
+  .grp-h { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .grp-h .gname { font-weight:600; }
+  .kb { font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; background:var(--surface-2); color:var(--ink-2); border:1px solid var(--line); white-space:nowrap; }
+  .kb.feature { background:var(--accent-soft); color:var(--accent); border-color:transparent; }
+  .kb.bugfix { background:var(--del-soft); color:var(--del); border-color:transparent; }
+  .kb.improvement { background:var(--warn-soft); color:var(--warn); border-color:transparent; }
+  .mrs { list-style:none; margin:6px 0 0; padding:0; }
+  .mrs li { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; padding:6px 0; border-top:1px dashed var(--line); align-items:center; }
+  .mrs li:first-child { border-top:0; }
+  .mr-t { min-width:0; }
+  .mr-t a { text-decoration:none; } .mr-t a:hover { text-decoration:underline; }
+  .mr-m { font-size:12px; color:var(--muted); }
+  .mr-ed { display:flex; gap:6px; align-items:center; }
+  .mr-ed input { width:220px; font:12px var(--sans); padding:5px 8px; }
+  .mr-ed select { font-size:12px; padding:4px 6px; }
+  .st-open { color:var(--warn); font-weight:600; }
+  .feat-list { list-style:none; margin:0; padding:0; }
+  .feat-list li { padding:8px 16px; border-top:1px solid var(--line); display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
+  .feat-list li:first-child { border-top:0; }
+  .team-ed table input, .team-ed table select { width:100%; }
+  .team-ed td { padding:4px 6px; }
+  .ctrl { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input[type=date] { border:1px solid var(--line); border-radius:8px; padding:6px 8px; background:var(--surface-2); color:var(--ink); font:13px var(--sans); }
+  .linkbtn { background:none; border:0; color:var(--accent); cursor:pointer; padding:0; font-size:12px; }
+  .editing .mr-ed { display:flex; } .mr-ed { display:none; }
+  @media (max-width: 700px) { .mrs li { grid-template-columns:1fr; } .mr-ed input { width:100%; } }
+  @media print {
+    header, .no-print, .mr-ed, .linkbtn, .toast { display:none !important; }
+    body, html { background:#fff; color:#000; }
+    main { padding:0; }
+    .person, .panel { break-inside:avoid; border-color:#bbb; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <a class="brand" href="/" style="text-decoration:none">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="2.5" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="18" r="2.5" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="12" r="2.5" stroke="var(--accent)" stroke-width="2"/><path d="M6 8.5v7M8.3 7.2c4 .8 6.2 2.2 7.4 3.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      MR Pilot
+    </a>
+    <nav aria-label="Halaman">
+      <a class="navlink" href="/">Review MR</a>
+      <a class="navlink" href="/security">Keamanan</a>
+      <a class="navlink" href="/dora">DORA</a>
+      <a class="navlink" href="/delivery" aria-current="page">Delivery tim</a>
+    </nav>
+    <div class="status">
+      <button class="icon-btn" id="theme" title="Ganti tema" aria-label="Ganti tema terang/gelap">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      </button>
+      <form method="post" action="/logout">
+        <button class="icon-btn" type="submit" title="Keluar" aria-label="Keluar dari dashboard">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </form>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="hero-line"><span class="hero-text" style="font-size:26px" id="title">Delivery tim</span></div>
+  <p class="hero-sub" id="h-sub">Pekerjaan setiap orang di tim, dikelompokkan per fitur, dari MR yang masuk ke Anda.</p>
+
+  <div class="filters no-print">
+    <div class="seg" id="f-period" role="group" aria-label="Periode">
+      <button data-v="this_week">Minggu ini</button><button data-v="last_week">Minggu lalu</button><button data-v="this_month">Bulan ini</button><button data-v="last_month">Bulan lalu</button><button data-v="custom">Rentang</button>
+    </div>
+    <span id="custom" class="ctrl" hidden>
+      <input type="date" id="f-from" aria-label="Dari tanggal"> – <input type="date" id="f-to" aria-label="Sampai tanggal">
+      <button class="btn ghost sm" id="apply">Tampilkan</button>
+    </span>
+  </div>
+  <div class="filters no-print">
+    <label class="ctrl" style="font-size:13px">Kelompokkan per
+      <select id="f-mode">
+        <option value="ai">AI (bisa diedit)</option>
+        <option value="label">Label GitLab</option>
+        <option value="milestone">Milestone GitLab</option>
+        <option value="ticket">Nomor tiket</option>
+      </select>
+    </label>
+    <span class="ctrl" id="prefix-wrap" hidden><input type="text" id="f-prefix" placeholder="awalan label, mis. feature::" style="width:200px"><button class="btn ghost sm" id="save-prefix">Simpan</button></span>
+    <span style="flex:1"></span>
+    <button class="btn ghost sm" id="edit">Edit pengelompokan</button>
+    <button class="btn ghost sm" id="regroup" title="Minta AI mengelompokkan ulang MR di periode ini (edit manual tetap dipakai)">Kelompokkan ulang</button>
+    <button class="btn ghost sm" id="copy">Salin teks</button>
+    <button class="btn ghost sm" id="print">Cetak / PDF</button>
+    <a class="btn sm" id="docx" href="#" style="text-decoration:none">Unduh Word</a>
+  </div>
+  <div class="msg" id="note" hidden></div>
+
+  <div class="dl-tiles" id="tiles"></div>
+
+  <div class="panel" id="feat-panel">
+    <div class="panel-h"><h2>Fitur yang dikerjakan</h2><span class="muted" style="font-size:13px" id="feat-count"></span></div>
+    <ul class="feat-list" id="features"></ul>
+  </div>
+
+  <div id="teams"></div>
+
+  <div class="panel team-ed no-print" style="margin-top:28px">
+    <div class="panel-h"><h2>Anggota tim</h2><span class="muted" style="font-size:13px">Username GitLab → nama di laporan → tim</span></div>
+    <div class="panel-b">
+      <div id="unreg"></div>
+      <div class="tscroll"><table><thead><tr><th>Username GitLab</th><th>Nama di laporan</th><th>Tim</th><th></th></tr></thead><tbody id="members"></tbody></table></div>
+      <div class="row" style="margin-top:10px;display:flex;gap:8px">
+        <button class="btn ghost sm" id="add-member">Tambah orang</button>
+        <button class="btn sm" id="save-team">Simpan anggota</button>
+      </div>
+    </div>
+  </div>
+  <datalist id="groups"></datalist>
+  <datalist id="team-names"><option value="BE"><option value="FE"><option value="Mobile"><option value="QA"></datalist>
+</main>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="/static/common.js"></script>
+<script>
+"use strict";
+let data = null, period = store.get("dl-period") || "this_week", editing = false, members = [];
+const KIND_OPTS = [["feature", "Fitur"], ["bugfix", "Bug fixing"], ["improvement", "Perbaikan teknis"], ["other", "Lainnya"]];
+
+function toast(t) { const el = $("#toast"); el.textContent = t; el.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => el.hidden = true, 3500); }
+function qs() {
+  let s = `period=${encodeURIComponent(period)}`;
+  if (period === "custom") s += `&from=${encodeURIComponent($("#f-from").value)}&to=${encodeURIComponent($("#f-to").value)}`;
+  return s;
+}
+async function load() {
+  data = await api(`/api/delivery?${qs()}`);
+  if (!members.length || !$("#members").dataset.dirty) members = (data.team_members || []).map(m => ({ ...m }));
+  render();
+}
+const kb = k => `<span class="kb ${esc(k)}">${esc(data.kinds[k] || k)}</span>`;
+const counts = p => KIND_OPTS.filter(([k]) => p.counts[k]).map(([k, l]) => `${p.counts[k]} ${l.toLowerCase()}`).join(", ") || "0 MR";
+
+function render() {
+  const t = data.totals, P = data.period;
+  $("#title").textContent = `Delivery tim · ${P.label}`;
+  $("#h-sub").textContent = `Pekerjaan setiap orang di tim, dikelompokkan per ${({ ai: "fitur (dikelompokkan AI)", label: "label GitLab", milestone: "milestone GitLab", ticket: "nomor tiket" })[data.mode]}. Sumber: MR yang masuk ke Anda.`;
+  $("#f-mode").value = data.mode;
+  $("#prefix-wrap").hidden = data.mode !== "label";
+  $("#f-prefix").value = data.label_prefix || "";
+  $("#regroup").hidden = data.mode !== "ai";
+  $("#docx").href = `/api/delivery.docx?${qs()}`;
+  $("#note").hidden = !data.note; $("#note").textContent = data.note || "";
+  $("#tiles").innerHTML = [["MR selesai", t.merged, "merged di periode ini"], ["Masih berjalan", t.open, "MR terbuka"],
+    ["Fitur", t.feature, "MR fitur / pengembangan"], ["Bug fixing", t.bugfix, "MR perbaikan bug"], ["Orang", t.people, "yang punya MR"]]
+    .map(([l, n, s]) => `<div class="tile"><div class="l">${esc(l)}</div><div class="n">${fmt(n)}</div><div class="s">${esc(s)}</div></div>`).join("");
+
+  $("#feat-count").textContent = data.features.length ? `${data.features.length} grup` : "";
+  $("#features").innerHTML = data.features.length ? data.features.map(f => `<li>${kb(f.kind)}<b>${esc(f.name)}</b>
+      <span class="muted">${f.merged} MR selesai${f.open ? `, ${f.open} berjalan` : ""} · ${esc(f.people.join(", "))}</span></li>`).join("")
+    : `<li class="muted">Belum ada MR di periode ini.</li>`;
+
+  const names = new Set();
+  data.teams.forEach(tm => tm.people.forEach(p => p.groups.forEach(g => names.add(g.name))));
+  $("#groups").innerHTML = [...names].sort().map(n => `<option value="${esc(n)}">`).join("");
+
+  $("#teams").innerHTML = data.teams.map(tm => `<div class="team-h"><h2>${tm.team === "Belum terdaftar" ? "Belum terdaftar di tim" : "Tim " + esc(tm.team)}</h2>
+      <span class="muted" style="font-size:13px">${tm.merged} MR selesai${tm.open ? `, ${tm.open} berjalan` : ""}</span></div>` +
+    tm.people.map(p => `<div class="person"><div class="person-h"><b>${esc(p.name)}</b><span class="muted" style="font-size:13px">${esc(counts(p))}</span></div>` +
+      p.groups.map(g => `<div class="grp"><div class="grp-h">${kb(g.kind)}<span class="gname">${esc(g.name)}</span>
+          <span class="muted" style="font-size:12px">${g.mrs.length} MR</span>
+          <button class="linkbtn rename" data-g="${esc(g.name)}">Ganti nama</button></div>
+        <ul class="mrs">${g.mrs.map(m => `<li><div class="mr-t"><a href="${esc(m.url)}" target="_blank" rel="noopener">!${m.iid} ${esc(m.title)}</a>
+            <div class="mr-m">${esc(m.project)} · ${esc(m.kind_label)} · ${m.state === "merged" ? "selesai " + esc(m.date) : '<span class="st-open">masih berjalan</span>'}${m.group_source === "manual" ? " · diedit" : ""}</div></div>
+          <div class="mr-ed" data-key="${esc(m.key)}"><input type="text" list="groups" value="${esc(m.group)}" aria-label="Grup fitur untuk !${m.iid}">
+            <select aria-label="Jenis pekerjaan">${KIND_OPTS.map(([k, l]) => `<option value="${k}"${k === m.kind ? " selected" : ""}>${l}</option>`).join("")}</select>
+            <button class="btn ghost sm save-mr">Simpan</button></div></li>`).join("")}</ul></div>`).join("") + `</div>`).join("")).join("")
+    || `<div class="empty" style="margin-top:24px"><strong>Belum ada MR di periode ini</strong>Laporan diisi dari MR yang masuk ke Anda lewat MR Pilot.</div>`;
+  document.body.classList.toggle("editing", editing);
+  $("#teams").querySelectorAll(".save-mr").forEach(b => b.onclick = async () => {
+    const box = b.closest(".mr-ed");
+    try {
+      await api("/api/delivery/override", { method: "POST", body: JSON.stringify({ key: box.dataset.key, group: box.querySelector("input").value, kind: box.querySelector("select").value }) });
+      toast("Tersimpan."); await load();
+    } catch (ex) { toast("Gagal: " + ex.message); }
+  });
+  $("#teams").querySelectorAll(".rename").forEach(b => b.onclick = () => {
+    const h = b.closest(".grp-h"), old = b.dataset.g;
+    h.innerHTML = `<input type="text" value="${esc(old)}" style="max-width:360px;font:13px var(--sans)" aria-label="Nama grup baru"><button class="btn sm">Simpan</button><button class="btn ghost sm">Batal</button>`;
+    const [inp, ok, cancel] = h.querySelectorAll("input,button");
+    inp.focus();
+    cancel.onclick = render;
+    ok.onclick = async () => {
+      try { await api("/api/delivery/rename", { method: "POST", body: JSON.stringify({ old, new: inp.value }) }); toast("Nama grup diganti."); await load(); }
+      catch (ex) { toast("Gagal: " + ex.message); }
+    };
+  });
+  renderMembers();
+}
+
+function renderMembers() {
+  $("#unreg").innerHTML = data.unregistered.length ? `<div class="note" style="margin-bottom:10px">Belum terdaftar: ${data.unregistered.map(u =>
+    `<button class="linkbtn add-unreg" data-u="${esc(u.username)}" data-n="${esc(u.name)}" style="font-size:13px">+ ${esc(u.name)} (@${esc(u.username)})</button>`).join(" · ")}</div>` : "";
+  $("#members").innerHTML = members.map((m, i) => `<tr data-i="${i}"><td><input type="text" value="${esc(m.username)}" data-f="username" placeholder="septyan"></td>
+    <td><input type="text" value="${esc(m.name)}" data-f="name" placeholder="Mas Septyan"></td>
+    <td><input type="text" value="${esc(m.team)}" data-f="team" list="team-names" placeholder="BE"></td>
+    <td><button class="linkbtn del-member">Hapus</button></td></tr>`).join("") || `<tr><td colspan="4" class="muted">Belum ada anggota. Tambahkan supaya MR masuk ke tim yang benar.</td></tr>`;
+  $("#members").querySelectorAll("input").forEach(inp => inp.oninput = () => {
+    members[+inp.closest("tr").dataset.i][inp.dataset.f] = inp.value; $("#members").dataset.dirty = "1";
+  });
+  $("#members").querySelectorAll(".del-member").forEach(b => b.onclick = () => { members.splice(+b.closest("tr").dataset.i, 1); $("#members").dataset.dirty = "1"; renderMembers(); });
+  $("#unreg").querySelectorAll(".add-unreg").forEach(b => b.onclick = () => {
+    members.push({ username: b.dataset.u, name: b.dataset.n, team: "" }); $("#members").dataset.dirty = "1"; renderMembers();
+  });
+}
+
+$("#add-member").onclick = () => { members.push({ username: "", name: "", team: "" }); renderMembers(); };
+$("#save-team").onclick = async () => {
+  try {
+    const r = await api("/api/delivery/team", { method: "PUT", body: JSON.stringify({ members }) });
+    members = r.members; delete $("#members").dataset.dirty; toast("Anggota tim disimpan."); await load();
+  } catch (ex) { toast("Gagal: " + ex.message); }
+};
+$("#f-mode").onchange = async () => {
+  try { await api("/api/delivery/mode", { method: "PUT", body: JSON.stringify({ mode: $("#f-mode").value }) }); toast("Cara pengelompokan diganti."); await load(); }
+  catch (ex) { toast("Gagal: " + ex.message); }
+};
+$("#save-prefix").onclick = async () => {
+  try { await api("/api/delivery/mode", { method: "PUT", body: JSON.stringify({ mode: "label", label_prefix: $("#f-prefix").value }) }); await load(); }
+  catch (ex) { toast("Gagal: " + ex.message); }
+};
+$("#edit").onclick = () => { editing = !editing; $("#edit").textContent = editing ? "Selesai edit" : "Edit pengelompokan"; document.body.classList.toggle("editing", editing); };
+$("#regroup").onclick = async () => {
+  $("#regroup").disabled = true; toast("AI sedang mengelompokkan ulang…");
+  try {
+    const body = { period }; if (period === "custom") { body.from = $("#f-from").value; body.to = $("#f-to").value; }
+    data = await api("/api/delivery/regroup", { method: "POST", body: JSON.stringify(body) }); render(); toast("Selesai.");
+  } catch (ex) { toast("Gagal: " + ex.message); }
+  $("#regroup").disabled = false;
+};
+$("#copy").onclick = async () => {
+  try {
+    const r = await fetch(`/api/delivery.txt?${qs()}`, { headers: { "X-MRPilot": "1" } });
+    await navigator.clipboard.writeText(await r.text()); toast("Teks laporan disalin, siap ditempel ke Teams.");
+  } catch { toast("Tidak bisa menyalin otomatis."); }
+};
+$("#print").onclick = () => window.print();
+$("#apply").onclick = () => { if (!$("#f-from").value) return toast("Isi tanggal mulai dulu."); load().catch(ex => toast(ex.message)); };
+$("#f-period").querySelectorAll("button").forEach(b => {
+  b.setAttribute("aria-pressed", String(b.dataset.v === period));
+  b.onclick = () => {
+    period = b.dataset.v; store.set("dl-period", period);
+    $("#f-period").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    $("#custom").hidden = period !== "custom";
+    if (period !== "custom") load().catch(ex => toast(ex.message));
+  };
+});
+$("#custom").hidden = period !== "custom";
+if (period === "custom") { period = "this_week"; $("#f-period").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.v === period))); $("#custom").hidden = true; }
+initTheme();
+load().catch(ex => { $("#h-sub").textContent = "Gagal memuat: " + ex.message; });
+</script>
+</body>
+</html>

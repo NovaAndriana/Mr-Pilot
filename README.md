@@ -402,3 +402,16 @@ E2E_MODE=docker E2E_IMAGE=mr-pilot:local python -m pytest -q tests/e2e   # sama,
 ```
 
 Skenario end-to-end mencakup: kartu MR + fallback AI, tidak ada duplikat, merge menunggu pipeline, tap ganda, konfirmasi verdict/standar, tolak dengan/ tanpa komentar, commit baru mengganti kartu, SHA basi, conflict/Draft/HTTP 405, koneksi putus saat merge, user tak berizin, Telegram mati/429/HTML ditolak, kartu sangat panjang, GitLab 502, MR ditutup di luar, Teams gagal, lockout login, API dashboard + SSE + CSP, sensor rahasia di log, SIGTERM saat merge, restart & `kill -9` saat merge, konflik bot 409, config tidak valid, simpan standar/AI dari dashboard, dan tombol palsu.
+
+
+## Laporan delivery tim
+
+Dashboard → **Delivery tim** menunjukkan apa saja yang dikerjakan setiap orang, untuk dilaporkan ke atasan:
+**tim (BE/FE/Mobile/QA) → orang → fitur → MR-nya**, plus daftar "Fitur yang dikerjakan" beserta siapa saja yang terlibat.
+
+- **Sumber:** MR yang masuk ke Anda (yang tercatat di MR Pilot). MR merged di periode itu dihitung *selesai*; MR yang masih terbuka ditampilkan sebagai *berjalan* (`delivery.include_open`).
+- **Jenis pekerjaan** dari judul/branch: `feat` = Fitur, `fix`/`hotfix` = Bug fixing, `refactor`/`perf` = Perbaikan teknis, lainnya = Lainnya. Kalau judulnya tidak ikut format, AI yang menentukan.
+- **Pengelompokan per fitur** (`delivery.group_by`, bisa diganti di halaman): `ai` (AI mengelompokkan MR yang berkaitan, termasuk bug fixing dari fitur yang sama), `label` (label GitLab, opsional hanya label berawalan `label_prefix`, mis. `feature::`), `milestone`, atau `ticket` (nomor tiket). Hasil AI disimpan per MR, jadi tidak dihitung ulang kecuali Anda menekan *Kelompokkan ulang*.
+- **Edit:** tombol *Edit pengelompokan* untuk memindahkan MR ke grup lain atau mengganti jenisnya, dan *Ganti nama* untuk nama grup. Edit manual selalu menang dan tetap berlaku di periode berikutnya.
+- **Anggota tim:** isi di bagian bawah halaman (username GitLab → nama di laporan → tim) atau di `delivery.team`. Author yang belum terdaftar muncul di *Belum terdaftar* dengan tombol tambah.
+- **Bentuk laporan:** *Unduh Word* (.docx siap kirim), *Cetak / PDF*, *Salin teks* (untuk Teams), dan ringkasan Telegram mingguan (`weekly_day`, `weekly_time`, default Jumat 16:00). Perintah Telegram: `/delivery` (minggu ini), `/delivery lalu`, `/delivery bulan`, `/delivery bulanlalu`.

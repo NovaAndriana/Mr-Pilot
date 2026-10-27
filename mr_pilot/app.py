@@ -1,4 +1,5 @@
 """Main loop: poll GitLab -> review -> Telegram buttons -> merge -> Teams."""
+import json
 import logging
 import os
 import queue
@@ -41,7 +42,10 @@ def mr_meta(mr):
     return dict(project=((mr.get("references") or {}).get("full") or "").split("!")[0],
                 author=author.get("name"), author_username=author.get("username"),
                 source_branch=mr.get("source_branch"), target_branch=mr.get("target_branch"),
-                pipeline=hp.get("status") or "none", mr_created_at=mr.get("created_at"))
+                pipeline=hp.get("status") or "none", mr_created_at=mr.get("created_at"),
+                labels=json.dumps(mr.get("labels") or [], ensure_ascii=False),
+                milestone=(mr.get("milestone") or {}).get("title") or "",
+                description=(mr.get("description") or "")[:2000])
 
 
 class Stop(BaseException):
@@ -70,6 +74,8 @@ class App:
         self.digest = Digest(cfg, self.store, self.safe_send)
         from .merge_order import MergeOrder
         self.order = MergeOrder(cfg, self.gl, self.store)
+        from .delivery import Delivery
+        self.delivery = Delivery(cfg, self.store, self.ai, self.gl, self.safe_send)
         # Security + DORA read lots of GitLab data: they run on a background thread with their own HTTP
         # session, so a long first sync never delays a Merge tap. Their Telegram messages are queued and
         # sent from the main loop.
@@ -233,6 +239,12 @@ class App:
                     raise
                 except Exception as ex:
                     log.warning("Ringkasan/pengingat gagal: %s", short_error(ex))
+                try:
+                    self.delivery.weekly_tick(url=self._dash_url("/delivery"))
+                except Stop:
+                    raise
+                except Exception as ex:
+                    log.warning("Laporan delivery mingguan gagal: %s", short_error(ex))
             if time.time() - self.last_prune > 86400:
                 self.last_prune = time.time()
                 try:
@@ -280,6 +292,10 @@ class App:
         self._tg_backoff_until = time.time() + min(5 * 2 ** (self._tg_fail - 1), 60)
 
     # ------------------------------------------------------------- Telegram io
+    def _dash_url(self, path):
+        base = str((self.cfg.get("dashboard") or {}).get("public_url") or "").rstrip("/")
+        return base + path if base else ""
+
     def safe_send(self, text, **kw):
         if self.dry:
             print("[TELEGRAM]", text)
@@ -360,7 +376,7 @@ class App:
         mr = self.gl.get_mr(pid, iid)
         if mr.get("state") != "opened":
             self.store.upsert(key, status="merged" if mr.get("state") == "merged" else "closed",
-                              decided_at=time.time())
+                              decided_at=time.time(), merged_at=mr.get("merged_at"))
             return
         same_sha = bool(rec and rec.get("sha") == mr["sha"])
         first_seen = rec["first_seen"] if same_sha and rec.get("first_seen") else time.time()
@@ -593,7 +609,8 @@ class App:
         if cmd in ("/start", "/help"):
             self.safe_send("<b>MR Pilot</b>\n/status: MR yang menunggu keputusan\n"
                            "/cek: cek GitLab sekarang\n/digest: ringkasan sekarang\n/kuota: pemakaian AI\n"
-                           "/keamanan: temuan SAST & secret\n/dora: performa delivery tim\n\n"
+                           "/keamanan: temuan SAST & secret\n/dora: performa delivery tim\n"
+                           "/delivery: pekerjaan tim minggu ini (/delivery lalu · bulan · bulanlalu)\n\n"
                            "Kartu MR punya tombol Merge, Tolak, Review ulang, Kirim saran ke MR, dan Buka MR.")
         elif cmd == "/status":
             pend = self.store.by_status("notified", "waiting_bot", "error", "notify_failed")
@@ -612,6 +629,10 @@ class App:
             self.safe_send(self.security.report())
         elif cmd == "/dora":
             self.safe_send(self.dora.report())
+        elif cmd in ("/delivery", "/laporan"):
+            arg = text.split()[1].lower() if len(text.split()) > 1 else ""
+            kind = {"lalu": "last_week", "bulan": "this_month", "bulanlalu": "last_month"}.get(arg, "this_week")
+            self.safe_send(self.delivery.text(self.delivery.build(kind), url=self._dash_url("/delivery")))
         elif cmd == "/digest":
             self.digest.send_digest()
         elif cmd == "/cek":
@@ -667,7 +688,7 @@ class App:
         key = mr_key(pid, iid)
         if mr.get("state") != "opened":
             self.store.upsert(key, status="merged" if mr.get("state") == "merged" else "closed",
-                              decided_at=time.time())
+                              decided_at=time.time(), merged_at=mr.get("merged_at"))
             self._finish_card(rec, f"<i>ℹ️ MR sudah {e(mr.get('state'))}.</i>")
             return
         if mr["sha"] != rec["sha"]:
