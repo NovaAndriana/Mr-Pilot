@@ -65,6 +65,7 @@
       <a class="navlink" href="/">Review MR</a>
       <a class="navlink" href="/security">Keamanan</a>
       <a class="navlink" href="/dora">DORA</a>
+      <a class="navlink" href="/daily">Daily task</a>
       <a class="navlink" href="/delivery" aria-current="page">Delivery tim</a>
     </nav>
     <div class="status">
@@ -217,8 +218,8 @@ function render() {
 function renderMembers() {
   $("#unreg").innerHTML = data.unregistered.length ? `<div class="note" style="margin-bottom:10px">Belum terdaftar: ${data.unregistered.map(u =>
     `<button class="linkbtn add-unreg" data-u="${esc(u.username)}" data-n="${esc(u.name)}" style="font-size:13px">+ ${esc(u.name)} (@${esc(u.username)})</button>`).join(" · ")}</div>` : "";
-  $("#members").innerHTML = members.map((m, i) => `<tr data-i="${i}"><td><input type="text" value="${esc(m.username)}" data-f="username" placeholder="septyan"></td>
-    <td><input type="text" value="${esc(m.name)}" data-f="name" placeholder="Mas Septyan"></td>
+  $("#members").innerHTML = members.map((m, i) => `<tr data-i="${i}"><td><input type="text" value="${esc(m.username)}" data-f="username" placeholder="budi"></td>
+    <td><input type="text" value="${esc(m.name)}" data-f="name" placeholder="Mas Budi"></td>
     <td><input type="text" value="${esc(m.team)}" data-f="team" list="team-names" placeholder="BE"></td>
     <td><button class="linkbtn del-member">Hapus</button></td></tr>`).join("") || `<tr><td colspan="4" class="muted">Belum ada anggota. Tambahkan supaya MR masuk ke tim yang benar.</td></tr>`;
   $("#members").querySelectorAll("input").forEach(inp => inp.oninput = () => {

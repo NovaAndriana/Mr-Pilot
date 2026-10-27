@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daily task · MR Pilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  [hidden] { display:none !important; }
+  .dtiles { display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:12px; margin:20px 0; }
+  @media (max-width: 860px) { .dtiles { grid-template-columns:repeat(2, minmax(0,1fr)); } }
+  .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:14px 0; }
+  .daynav { display:flex; gap:6px; align-items:center; }
+  input[type=date] { border:1px solid var(--line); border-radius:8px; padding:6px 8px; background:var(--surface-2); color:var(--ink); font:13px var(--sans); }
+  .team-tabs { display:flex; gap:6px; flex-wrap:wrap; margin:18px 0 6px; }
+  .team-tabs button { border:1px solid var(--line); background:var(--surface); border-radius:999px; padding:5px 14px; cursor:pointer; color:var(--ink-2); }
+  .team-tabs button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); border-color:transparent; font-weight:600; }
+  .team-h { margin:26px 0 4px; font-size:18px; }
+  .grp-h { color:var(--ink-2); font-size:13px; margin:0 0 10px; }
+  .block-h { font-weight:600; margin:16px 0 8px; display:flex; gap:8px; align-items:baseline; }
+  .task { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
+  .task.sub { margin:10px 0 0 18px; background:var(--surface-2); }
+  .task-h { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
+  .task-h .tk { font-family:var(--mono); font-size:13px; font-weight:500; }
+  .task-h .tt { font-weight:600; }
+  .task-h .act { margin-left:auto; display:flex; gap:10px; }
+  .linkbtn { background:none; border:0; color:var(--accent); cursor:pointer; padding:0; font-size:12px; }
+  .linkbtn.del { color:var(--del); }
+  .fgrid { display:grid; grid-template-columns:2fr 70px 1.2fr 1fr; gap:8px; margin-top:10px; }
+  .fgrid2 { display:grid; grid-template-columns:2fr 2fr 1fr; gap:8px; margin-top:8px; }
+  @media (max-width: 760px) { .fgrid, .fgrid2 { grid-template-columns:1fr 1fr; } .fgrid .wide, .fgrid2 .wide { grid-column:1 / -1; } }
+  .fld label { display:block; font-size:11px; color:var(--muted); margin-bottom:2px; }
+  .fld input, .fld textarea, .fld select { width:100%; border:1px solid var(--line); border-radius:8px; padding:6px 8px; background:var(--surface-2); color:var(--ink); font:13px var(--sans); }
+  .fld textarea { resize:vertical; min-height:34px; }
+  .fld input.saving, .fld textarea.saving { border-color:var(--accent); }
+  .warns { list-style:none; margin:8px 0 0; padding:0; display:grid; gap:4px; }
+  .warns li { font-size:12.5px; padding:4px 8px; border-radius:6px; background:var(--warn-soft); color:var(--warn); }
+  .warns li.info { background:var(--surface-2); color:var(--ink-2); }
+  .warns li.escalate { background:var(--del-soft); color:var(--del); font-weight:600; }
+  .ev { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .ev a { font-size:12px; text-decoration:none; padding:1px 8px; border-radius:999px; border:1px solid var(--line); color:var(--ink-2); }
+  .ev a.merged { background:var(--add-soft); color:var(--add); border-color:transparent; }
+  .ev a.failed { background:var(--del-soft); color:var(--del); border-color:transparent; }
+  .scope { margin:6px 0 0; padding-left:18px; font-size:13px; color:var(--ink-2); }
+  .unchanged { font-size:11px; color:var(--muted); }
+  .att { list-style:none; margin:0; padding:0; }
+  .att li { padding:8px 16px; border-top:1px solid var(--line); font-size:13px; display:flex; gap:8px; flex-wrap:wrap; }
+  .att li:first-child { border-top:0; }
+  .att a { cursor:pointer; text-decoration:underline; }
+  .corr { font-size:13px; border-top:1px solid var(--line); padding:6px 0; }
+  .corr del { color:var(--del); } .corr ins { color:var(--add); text-decoration:none; }
+  textarea.paste { width:100%; min-height:260px; border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--surface-2); color:var(--ink); font:12.5px/1.5 var(--mono); }
+  .chips2 { display:flex; gap:6px; flex-wrap:wrap; }
+  .chips2 span { border:1px solid var(--line); border-radius:999px; padding:2px 4px 2px 10px; font-size:12.5px; display:inline-flex; gap:4px; align-items:center; }
+  .chips2 button { border:0; background:none; cursor:pointer; color:var(--muted); }
+  .form2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .form2 .wide { grid-column:1 / -1; }
+  .highlight { outline:2px solid var(--accent); outline-offset:2px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <a class="brand" href="/" style="text-decoration:none">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="2.5" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="18" r="2.5" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="12" r="2.5" stroke="var(--accent)" stroke-width="2"/><path d="M6 8.5v7M8.3 7.2c4 .8 6.2 2.2 7.4 3.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      MR Pilot
+    </a>
+    <nav aria-label="Halaman">
+      <a class="navlink" href="/">Review MR</a>
+      <a class="navlink" href="/security">Keamanan</a>
+      <a class="navlink" href="/dora">DORA</a>
+      <a class="navlink" href="/daily" aria-current="page">Daily task</a>
+      <a class="navlink" href="/delivery">Delivery tim</a>
+    </nav>
+    <div class="status">
+      <button class="icon-btn" id="theme" title="Ganti tema" aria-label="Ganti tema terang/gelap">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      </button>
+      <form method="post" action="/logout">
+        <button class="icon-btn" type="submit" title="Keluar" aria-label="Keluar dari dashboard">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </form>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="hero-line"><span class="hero-text" style="font-size:26px" id="title">Daily check</span></div>
+  <p class="hero-sub">Review pekerjaan tim setiap pagi. Tempel teks dari Teams atau isi langsung di sini; perubahan tersimpan otomatis.</p>
+
+  <div class="toolbar">
+    <div class="daynav">
+      <button class="btn ghost sm" id="prev" title="Hari sebelumnya">◀</button>
+      <input type="date" id="day" aria-label="Tanggal">
+      <button class="btn ghost sm" id="next" title="Hari berikutnya">▶</button>
+      <button class="btn ghost sm" id="today">Hari ini</button>
+    </div>
+    <span style="flex:1"></span>
+    <button class="btn ghost sm" id="carry" hidden></button>
+    <button class="btn ghost sm" id="open-paste">Tempel teks Teams</button>
+    <button class="btn ghost sm" id="open-add">Tambah task</button>
+    <select id="copy-team" aria-label="Tim yang disalin"><option value="">Semua tim</option></select>
+    <button class="btn sm" id="copy">Salin untuk Teams</button>
+  </div>
+
+  <div class="dtiles" id="tiles"></div>
+
+  <div class="panel" id="att-panel" hidden>
+    <div class="panel-h"><h2>Perlu ditanyakan</h2><span class="muted" style="font-size:13px" id="att-count"></span></div>
+    <ul class="att" id="att"></ul>
+  </div>
+
+  <div class="team-tabs" id="tabs"></div>
+  <div id="board"></div>
+
+  <div class="panel" style="margin-top:28px">
+    <div class="panel-h"><h2>Daftar status</h2><span class="muted" style="font-size:13px">Dipakai di pilihan status dan untuk merapikan teks yang ditempel</span></div>
+    <div class="panel-b">
+      <div class="chips2" id="statuses"></div>
+      <div style="display:flex;gap:8px;margin-top:10px;max-width:420px"><input type="text" id="new-status" placeholder="Status baru, mis. Waiting Deploy"><button class="btn ghost sm" id="add-status">Tambah</button></div>
+    </div>
+  </div>
+  <datalist id="dl-status"></datalist><datalist id="dl-pic"></datalist><datalist id="dl-team"></datalist><datalist id="dl-group"></datalist>
+</main>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="paste-drawer" hidden role="dialog" aria-modal="true" aria-labelledby="paste-title">
+  <div class="drawer-h"><h3 id="paste-title">Tempel teks daily check</h3><button class="icon-btn close" style="margin-left:auto" aria-label="Tutup">✕</button></div>
+  <div class="drawer-b">
+    <p class="muted" style="margin-top:0;font-size:13px">Tempel teks yang biasa Anda ketik di Teams (boleh beberapa tim sekaligus). Status, salah ketik, link, dan persentase dirapikan otomatis. Periksa dulu sebelum disimpan.</p>
+    <textarea class="paste" id="paste" placeholder="DAILY CHECK TEAM FE&#10;Tanggal: 23 Oktober 2026&#10;&#10;1. GROUP FE — ...&#10;A. PIC: ...&#10;1. IDAS-1234 — Judul&#10;- Progress: ...&#10;- Status: ...&#10;- Next Action: ...&#10;- Blocker: ..."></textarea>
+    <label style="display:flex;gap:8px;align-items:center;margin:10px 0;font-size:13px"><input type="checkbox" id="use-ai"> Rapikan ejaan juga dengan AI (lebih lama)</label>
+    <div style="display:flex;gap:8px"><button class="btn ghost sm" id="check-paste">Periksa</button><button class="btn sm" id="save-paste" disabled>Simpan</button></div>
+    <div id="preview" style="margin-top:14px"></div>
+  </div>
+</aside>
+<aside class="drawer" id="add-drawer" hidden role="dialog" aria-modal="true" aria-labelledby="add-title">
+  <div class="drawer-h"><h3 id="add-title">Tambah task</h3><button class="icon-btn close" style="margin-left:auto" aria-label="Tutup">✕</button></div>
+  <div class="drawer-b">
+    <div class="form2">
+      <div class="fld"><label>Tim</label><input id="a-team" list="dl-team" placeholder="BE"></div>
+      <div class="fld"><label>Group</label><input id="a-grp" list="dl-group" placeholder="BE — MAS ... & MAS ..."></div>
+      <div class="fld"><label>PIC (kosongkan untuk item tanpa PIC, mis. analisis)</label><input id="a-pic" list="dl-pic"></div>
+      <div class="fld"><label>Nomor tiket (opsional)</label><input id="a-ticket" placeholder="IDAS-1234"></div>
+      <div class="fld wide"><label>Judul</label><input id="a-title"></div>
+      <div class="fld wide"><label>Link (otomatis dari nomor tiket kalau kosong)</label><input id="a-link"></div>
+      <div class="wide form2" id="entry-fields"><div class="fld"><label>Status</label><input id="a-status" list="dl-status" value="Open"></div>
+      <div class="fld"><label>Progress</label><input id="a-progress" placeholder="Belum dimulai."></div></div>
+    </div>
+    <div style="margin-top:14px"><button class="btn sm" id="save-add">Simpan</button> <span class="msg" id="add-msg"></span></div>
+  </div>
+</aside>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="/static/common.js"></script>
+<script>
+"use strict";
+let editing = null, data = null, day = new URLSearchParams(location.search).get("day") || "", team = store.get("daily-team") || "", parsed = null;
+function toast(t) { const el = $("#toast"); el.textContent = t; el.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => el.hidden = true, 3500); }
+const iso = d => d.toISOString().slice(0, 10);
+const localToday = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return iso(d); };
+
+async function load(d) {
+  if (d !== undefined) day = d;
+  data = await api("/api/daily" + (day ? "?day=" + day : ""));
+  day = data.day;
+  history.replaceState(null, "", "/daily?day=" + day);
+  render();
+}
+
+function render() {
+  $("#title").textContent = "Daily check · " + data.day_label;
+  $("#day").value = data.day;
+  $("#prev").disabled = !data.prev_day; $("#next").disabled = !data.next_day;
+  const s = data.summary;
+  $("#carry").hidden = !data.prev_day || s.tasks > 0;
+  $("#carry").textContent = data.prev_day ? `Lanjutkan dari ${data.prev_day}` : "";
+  $("#tiles").innerHTML = [["Task", s.tasks, "dicek hari ini"], ["Perlu dicek", s.warnings, "isi yang janggal"], ["Blocker", s.blockers, "masih tertahan"],
+    ["Belum berubah", s.unchanged, "sama dengan kemarin"], ["Done", s.done, "selesai"]]
+    .map(([l, n, x]) => `<div class="tile"><div class="l">${esc(l)}</div><div class="n">${fmt(n)}</div><div class="s">${esc(x)}</div></div>`).join("");
+  $("#dl-status").innerHTML = data.statuses.map(x => `<option value="${esc(x)}">`).join("");
+  $("#dl-pic").innerHTML = data.pics.map(x => `<option value="${esc(x)}">`).join("");
+  $("#dl-team").innerHTML = data.team_names.map(x => `<option value="${esc(x)}">`).join("");
+  $("#dl-group").innerHTML = data.group_names.map(x => `<option value="${esc(x)}">`).join("");
+  const sel = $("#copy-team"), cur = sel.value;
+  sel.innerHTML = `<option value="">Semua tim</option>` + data.team_names.map(x => `<option>${esc(x)}</option>`).join(""); sel.value = cur;
+  if (team && !data.team_names.includes(team)) team = "";
+  $("#tabs").innerHTML = data.team_names.length > 1 ? [["", "Semua"], ...data.team_names.map(t => [t, "Tim " + t])]
+    .map(([v, l]) => `<button data-v="${esc(v)}" aria-pressed="${v === team}">${esc(l)}</button>`).join("") : "";
+  $("#tabs").querySelectorAll("button").forEach(b => b.onclick = () => { team = b.dataset.v; store.set("daily-team", team); render(); });
+  renderAttention();
+  renderBoard();
+  $("#statuses").innerHTML = data.statuses.map((x, i) => `<span>${esc(x)}<button data-i="${i}" aria-label="Hapus ${esc(x)}">✕</button></span>`).join("");
+  $("#statuses").querySelectorAll("button").forEach(b => b.onclick = () => saveStatuses(data.statuses.filter((_, i) => i !== +b.dataset.i)));
+}
+
+function allTasks() {
+  const out = [];
+  const walk = t => { out.push(t); (t.subtasks || []).forEach(walk); };
+  data.teams.forEach(tm => tm.groups.forEach(g => g.blocks.forEach(b => b.tasks.forEach(walk))));
+  return out;
+}
+
+function renderAttention() {
+  const items = [];
+  allTasks().forEach(t => (t.warnings || []).filter(w => w.level !== "info").forEach(w =>
+    items.push({ t, w, rank: w.level === "escalate" ? 0 : 1 })));
+  items.sort((a, b) => a.rank - b.rank);
+  $("#att-panel").hidden = !items.length;
+  $("#att-count").textContent = items.length ? `${items.length} catatan` : "";
+  $("#att").innerHTML = items.map(({ t, w }) => `<li><a data-id="${t.id}">${esc(t.ticket || t.title)}</a><span class="muted">${esc(t.pic || t.team)}</span><span${w.level === "escalate" ? ' style="color:var(--del);font-weight:600"' : ""}>${esc(w.msg)}</span></li>`).join("");
+  $("#att").querySelectorAll("a").forEach(a => a.onclick = () => {
+    const el = document.getElementById("t-" + a.dataset.id); if (!el) return;
+    if (team) { team = ""; render(); }
+    const el2 = document.getElementById("t-" + a.dataset.id);
+    el2.scrollIntoView({ behavior: "smooth", block: "center" }); el2.classList.add("highlight"); setTimeout(() => el2.classList.remove("highlight"), 1800);
+  });
+}
+
+function warnHtml(t) {
+  return (t.warnings || []).length ? `<ul class="warns">${t.warnings.map(w => `<li class="${esc(w.level)}">${esc(w.msg)}</li>`).join("")}</ul>` : "";
+}
+
+function taskHtml(t, sub) {
+  const ev = (t.mrs || []).map(m => `<a href="${esc(m.url)}" target="_blank" rel="noopener" class="${m.state === "merged" ? "merged" : (m.pipeline === "failed" ? "failed" : "")}" title="${esc(m.title)}">MR !${m.iid} · ${m.state === "merged" ? "merged ke " + esc(m.target) : (m.state === "open" ? "terbuka" + (m.pipeline && m.pipeline !== "none" ? ", pipeline " + esc(m.pipeline) : "") : "ditutup")}</a>`).join("");
+  const head = `<div class="task-h">${t.ticket ? (t.link ? `<a class="tk" href="${esc(t.link)}" target="_blank" rel="noopener">${esc(t.ticket)}</a>` : `<span class="tk">${esc(t.ticket)}</span>`) : ""}
+      <span class="tt">${esc(t.title)}</span>${t.changed === false ? '<span class="unchanged">sama dengan kemarin</span>' : ""}
+      <span class="act"><button class="linkbtn ed" data-id="${t.id}">Ubah</button>${t._header_only ? "" : `<button class="linkbtn del rm" data-id="${t.id}" title="Hapus dari hari ini">Hapus dari hari ini</button>`}</span></div>`;
+  const scope = (t.scope || []).length ? `<ul class="scope">${t.scope.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : "";
+  const fields = t._header_only ? "" : `<div class="fgrid" data-id="${t.id}">
+      <div class="fld wide"><label>Progress</label><textarea rows="1" data-f="progress">${esc(t.progress || "")}</textarea></div>
+      <div class="fld"><label>%</label><input type="number" min="0" max="100" data-f="pct" value="${t.pct ?? ""}"></div>
+      <div class="fld"><label>Status</label><input list="dl-status" data-f="status" value="${esc(t.status || "")}"></div>
+      <div class="fld"><label>Keterangan status</label><input data-f="status_note" value="${esc(t.status_note || "")}" placeholder="mis. Testing"></div></div>
+    <div class="fgrid2" data-id="${t.id}">
+      <div class="fld wide"><label>Next action</label><textarea rows="1" data-f="next_action">${esc(t.next_action || "")}</textarea></div>
+      <div class="fld"><label>Blocker</label><textarea rows="1" data-f="blocker">${esc(t.blocker || "")}</textarea></div>
+      <div class="fld"><label>Menunggu siapa</label><input data-f="waiting_on" list="dl-pic" value="${esc(t.waiting_on || "")}"></div></div>`;
+  return `<div class="task${sub ? " sub" : ""}" id="t-${t.id}">${head}${ev ? `<div class="ev">${ev}</div>` : ""}${scope}${fields}
+    <div id="w-${t.id}">${warnHtml(t)}</div>${(t.subtasks || []).map(s => taskHtml(s, true)).join("")}</div>`;
+}
+
+function renderBoard() {
+  const teams = data.teams.filter(t => !team || t.team === team);
+  $("#board").innerHTML = teams.map(tm => `<h2 class="team-h">Tim ${esc(tm.team)}</h2>` + tm.groups.map(g =>
+    (g.name ? `<div class="grp-h">GROUP ${esc(g.name)}${(data.groups_meta[g.name] || {}).version ? " · Versi " + esc(data.groups_meta[g.name].version) : ""}</div>` : "") +
+    g.blocks.map(b => (b.kind === "pic" ? `<div class="block-h">PIC: ${esc(b.name)}<span class="muted" style="font-weight:400;font-size:12px">${b.tasks.length} task</span></div>` : `<div class="block-h"><span class="muted" style="font-weight:400;font-size:12px">Tanpa PIC</span></div>`) +
+      b.tasks.map(t => taskHtml(t, false)).join("")).join("")).join("")).join("")
+    || `<div class="empty" style="margin-top:24px"><strong>Belum ada task untuk ${esc(data.day_label)}</strong>${data.prev_day ? `Tekan <b>Lanjutkan dari ${esc(data.prev_day)}</b> untuk membawa task yang belum selesai, ` : ""}tempel teks dari Teams, atau tambah task manual.</div>`;
+  $("#board").querySelectorAll("textarea").forEach(autoGrow);
+  $("#board").querySelectorAll("[data-f]").forEach(inp => {
+    inp.addEventListener("input", () => { if (inp.tagName === "TEXTAREA") autoGrow(inp); });
+    inp.addEventListener("change", () => saveField(inp));
+  });
+  $("#board").querySelectorAll(".ed").forEach(b => b.onclick = () => {
+    const t = allTasks().find(x => x.id === +b.dataset.id); if (!t) return;
+    editing = t;
+    $("#add-title").textContent = "Ubah task";
+    $("#a-team").value = t.team || ""; $("#a-grp").value = t.grp || ""; $("#a-pic").value = t.pic || "";
+    $("#a-ticket").value = t.ticket || ""; $("#a-title").value = t.title || ""; $("#a-link").value = t.link || "";
+    $("#entry-fields").hidden = true; $("#add-msg").textContent = ""; openDrawer("#add-drawer");
+  });
+  $("#board").querySelectorAll(".rm").forEach(b => b.onclick = async () => {
+    const box = b.closest(".task"); box.style.opacity = .5;
+    try { data = await api("/api/daily/remove", { method: "POST", body: JSON.stringify({ day, task_id: +b.dataset.id }) }); render(); toast("Dihapus dari hari ini."); }
+    catch (ex) { box.style.opacity = 1; toast("Gagal: " + ex.message); }
+  });
+}
+function autoGrow(t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight + 2, 200) + "px"; }
+
+async function saveField(inp) {
+  const id = +inp.closest("[data-id]").dataset.id, entry = { [inp.dataset.f]: inp.value };
+  inp.classList.add("saving");
+  try {
+    const fresh = await api("/api/daily/entry", { method: "POST", body: JSON.stringify({ day, task_id: id, entry }) });
+    data = fresh;
+    const t = allTasks().find(x => x.id === id);
+    if (t) {
+      document.getElementById("w-" + id).innerHTML = warnHtml(t);
+      const box = document.getElementById("t-" + id);
+      // show the tidied value (typos fixed, "." added) except in the field that still has focus
+      box.querySelectorAll(":scope > .fgrid [data-f], :scope > .fgrid2 [data-f]").forEach(el => {
+        if (el !== document.activeElement) el.value = t[el.dataset.f] ?? "";
+      });
+    }
+    const s = data.summary;
+    $("#tiles").querySelectorAll(".tile .n").forEach((n, i) => n.textContent = fmt([s.tasks, s.warnings, s.blockers, s.unchanged, s.done][i]));
+    renderAttention();
+  } catch (ex) { toast("Gagal menyimpan: " + ex.message); }
+  inp.classList.remove("saving");
+}
+
+async function saveStatuses(list) {
+  try { await api("/api/daily/statuses", { method: "PUT", body: JSON.stringify({ statuses: list }) }); await load(); toast("Daftar status disimpan."); }
+  catch (ex) { toast("Gagal: " + ex.message); }
+}
+$("#add-status").onclick = () => { const v = $("#new-status").value.trim(); if (v) { $("#new-status").value = ""; saveStatuses([...data.statuses, v]); } };
+
+/* drawers */
+function openDrawer(id) { $("#scrim").hidden = false; $(id).hidden = false; }
+function closeDrawers() { $("#scrim").hidden = true; document.querySelectorAll(".drawer").forEach(d => d.hidden = true); }
+$("#scrim").onclick = closeDrawers;
+document.querySelectorAll(".drawer .close").forEach(b => b.onclick = closeDrawers);
+addEventListener("keydown", e => { if (e.key === "Escape") closeDrawers(); });
+
+$("#open-paste").onclick = () => { openDrawer("#paste-drawer"); $("#paste").focus(); };
+$("#paste").oninput = () => { $("#save-paste").disabled = true; parsed = null; };
+$("#check-paste").onclick = async () => {
+  const text = $("#paste").value;
+  if (!text.trim()) return toast("Tempel teksnya dulu.");
+  $("#check-paste").disabled = true; $("#preview").innerHTML = '<p class="muted">Memeriksa…</p>';
+  try {
+    parsed = await api("/api/daily/preview", { method: "POST", body: JSON.stringify({ text, ai: $("#use-ai").checked }) });
+    const nTask = parsed.tasks.length, teams = [...new Set(parsed.tasks.map(t => t.team))];
+    $("#preview").innerHTML = `<div class="note"><b>${nTask} task</b> dari ${teams.length} tim (${esc(teams.join(", "))}) untuk tanggal <b>${esc(parsed.day_label)}</b>${parsed.day_from_text ? "" : " (tanggal tidak ada di teks, dipakai hari ini)"}.</div>
+      ${parsed.note ? `<p class="msg bad">${esc(parsed.note)}</p>` : ""}
+      <h4>Dirapikan otomatis (${parsed.corrections.length})</h4>
+      ${parsed.corrections.length ? parsed.corrections.map(c => `<div class="corr"><span class="mono">${esc(c.task)}</span> · ${esc(c.field)}: ${c.before ? `<del>${esc(c.before)}</del> → ` : ""}<ins>${esc(c.after)}</ins> <span class="muted">(${esc(c.why)})</span></div>`).join("") : '<p class="muted">Tidak ada.</p>'}
+      ${parsed.problems.length ? `<h4>Tidak terbaca (${parsed.problems.length})</h4>` + parsed.problems.map(p => `<div class="corr">baris ${p.line}: ${esc(p.msg)}</div>`).join("") : ""}
+      <p class="muted" style="font-size:12.5px">Isi yang janggal (status vs progress, next action hasil salin, link beda tiket) muncul di setiap task setelah disimpan.</p>`;
+    $("#save-paste").disabled = !nTask;
+    $("#save-paste").textContent = `Simpan ke ${parsed.day_label}`;
+  } catch (ex) { $("#preview").innerHTML = `<p class="msg bad">${esc(ex.message)}</p>`; }
+  $("#check-paste").disabled = false;
+};
+$("#save-paste").onclick = async () => {
+  if (!parsed) return;
+  $("#save-paste").disabled = true;
+  try {
+    data = await api("/api/daily/import", { method: "POST", body: JSON.stringify({ text: $("#paste").value, ai: $("#use-ai").checked, day: parsed.day }) });
+    day = data.day; history.replaceState(null, "", "/daily?day=" + day);
+    render(); closeDrawers(); $("#paste").value = ""; $("#preview").innerHTML = ""; parsed = null;
+    toast(`Tersimpan. ${data.summary.warnings} catatan perlu dicek.`);
+  } catch (ex) { toast("Gagal: " + ex.message); $("#save-paste").disabled = false; }
+};
+
+$("#open-add").onclick = () => {
+  editing = null; $("#add-title").textContent = "Tambah task"; $("#entry-fields").hidden = false;
+  ["#a-ticket", "#a-title", "#a-link", "#a-progress"].forEach(s => $(s).value = "");
+  if (team) $("#a-team").value = team;
+  $("#add-msg").textContent = ""; openDrawer("#add-drawer"); $("#a-ticket").focus();
+};
+$("#save-add").onclick = async () => {
+  const task = { id: editing ? editing.id : undefined, parent_id: editing ? editing.parent_id : undefined,
+    scope: editing ? editing.scope : undefined, team: $("#a-team").value, grp: $("#a-grp").value, pic: $("#a-pic").value, ticket: $("#a-ticket").value,
+    title: $("#a-title").value, link: $("#a-link").value };
+  const entry = { status: $("#a-status").value, progress: $("#a-progress").value, next_action: "-", blocker: "-" };
+  try {
+    data = await api("/api/daily/task", { method: "POST", body: JSON.stringify({ day, task, entry: editing ? null : entry }) });
+    render(); closeDrawers(); toast(editing ? "Task diperbarui." : "Task ditambahkan."); editing = null;
+    ["#a-ticket", "#a-title", "#a-link", "#a-progress"].forEach(s => $(s).value = "");
+  } catch (ex) { $("#add-msg").className = "msg bad"; $("#add-msg").textContent = ex.message; }
+};
+
+$("#carry").onclick = async () => {
+  try { data = await api("/api/daily/carry", { method: "POST", body: JSON.stringify({ day }) }); render(); toast(`${data.carried} task dibawa dari ${data.prev_day}.`); }
+  catch (ex) { toast("Gagal: " + ex.message); }
+};
+$("#copy").onclick = async () => {
+  try {
+    const t = $("#copy-team").value;
+    const r = await fetch(`/api/daily.txt?day=${day}` + (t ? "&team=" + encodeURIComponent(t) : ""), { headers: { "X-MRPilot": "1" } });
+    await navigator.clipboard.writeText(await r.text()); toast("Teks disalin, siap ditempel ke Teams.");
+  } catch { toast("Tidak bisa menyalin otomatis."); }
+};
+$("#prev").onclick = () => data.prev_day && load(data.prev_day);
+$("#next").onclick = () => data.next_day && load(data.next_day);
+$("#today").onclick = () => load(localToday());
+$("#day").onchange = () => $("#day").value && load($("#day").value);
+initTheme();
+load(day || localToday()).catch(ex => toast("Gagal memuat: " + ex.message));
+</script>
+</body>
+</html>

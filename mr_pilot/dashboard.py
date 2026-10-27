@@ -318,6 +318,7 @@ class Dashboard:
         self.files = StandardsFiles(cfg)
         self.store = store
         self._delivery = None
+        self._daily = None
         self.httpd = None
         self.failed = {}            # ip -> [timestamps of failed logins]
         self.fail_lock = threading.Lock()
@@ -334,6 +335,13 @@ class Dashboard:
                 gl = GitLab(g["url"], g["token"], verify=g.get("verify_ssl", True))
             self._delivery = Delivery(self.cfg, self.store, self.ai, gl)
         return self._delivery
+
+    @property
+    def daily(self):
+        if self._daily is None:
+            from .daily import Daily
+            self._daily = Daily(self.cfg, self.store, self.ai)
+        return self._daily
 
     LOCK_MAX, LOCK_WINDOW = 10, 900  # 10 wrong passwords per 15 minutes per address
 
@@ -495,7 +503,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if u.path in ("/", "/index.html"):
                 return self._static("index.html", "text/html; charset=utf-8")
-            if u.path in ("/security", "/dora", "/delivery"):
+            if u.path in ("/security", "/dora", "/delivery", "/daily"):
                 return self._static(u.path[1:] + ".html", "text/html; charset=utf-8")
             if u.path == "/static/app.css":
                 return self._static("app.css", "text/css; charset=utf-8")
@@ -510,6 +518,14 @@ class _Handler(BaseHTTPRequestHandler):
                 p = (q.get("project") or [""])[0]
                 return self._send(200, insights.dora_data(self.app.cfg, self.app.store, self._qint(q, "days", 30, 7, 365),
                                                           int(p) if p.isdigit() else None))
+            if u.path in ("/api/daily", "/api/daily.txt"):
+                day = (q.get("day") or [""])[0] or None
+                if day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+                    return self._send(400, {"error": "tanggal harus YYYY-MM-DD"})
+                if u.path.endswith(".txt"):
+                    return self._send(200, self.app.daily.teams_text(day, (q.get("team") or [""])[0] or None),
+                                      "text/plain; charset=utf-8")
+                return self._send(200, self.app.daily.day(day))
             if u.path in ("/api/delivery", "/api/delivery.docx", "/api/delivery.txt"):
                 return self._delivery_get(u.path, q)
             if u.path == "/api/summary":
@@ -613,6 +629,8 @@ class _Handler(BaseHTTPRequestHandler):
                 which = "sec" if "security" in u.path else "dora"
                 self.app.store.kv_set(f"{which}_sync_request", time.time())
                 return self._send(202, {"ok": True, "message": "Sinkronisasi dijadwalkan, biasanya selesai dalam 1 menit."})
+            if u.path.startswith("/api/daily/"):
+                return self._daily_mutate(method, u.path, body)
             if u.path.startswith("/api/delivery/"):
                 return self._delivery_mutate(method, u.path, body)
             if method == "POST" and u.path == "/api/standards/test":
@@ -624,6 +642,40 @@ class _Handler(BaseHTTPRequestHandler):
             log.exception("dashboard %s %s", method, u.path)
             return self._send(500, {"error": redact(ex)[:300]})
         self._send(404, {"error": "not found"})
+
+    # ------------------------------------------------------------ daily
+    def _daily_mutate(self, method, path, body):
+        dl = self.app.daily
+        day = str(body.get("day") or "") or None
+        if day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            raise ValueError("tanggal harus YYYY-MM-DD")
+        if method == "POST" and path == "/api/daily/preview":
+            return self._send(200, dl.preview(str(body.get("text") or ""), bool(body.get("ai"))))
+        if method == "POST" and path == "/api/daily/import":
+            text = str(body.get("text") or "")
+            if not text.strip():
+                raise ValueError("teks kosong")
+            return self._send(200, dl.import_text(text, day, bool(body.get("ai"))))
+        if method == "POST" and path == "/api/daily/task":
+            t = body.get("task") or {}
+            tid = dl.save_task(t)
+            if day and body.get("entry") is not None:
+                dl.save_entry(tid, day, body.get("entry") or {})
+            return self._send(200, {"id": tid, **(dl.day(day) if day else {})})
+        if method == "POST" and path == "/api/daily/entry":
+            dl.save_entry(int(body["task_id"]), day or "", body.get("entry") or {})
+            return self._send(200, dl.day(day))
+        if method == "POST" and path == "/api/daily/remove":
+            dl.remove_entry(int(body["task_id"]), day or "")
+            if body.get("archive"):
+                dl.archive(int(body["task_id"]))
+            return self._send(200, dl.day(day))
+        if method == "POST" and path == "/api/daily/carry":
+            n = dl.carry_over(day or "")
+            return self._send(200, {**dl.day(day), "carried": n})
+        if method == "PUT" and path == "/api/daily/statuses":
+            return self._send(200, {"statuses": dl.save_statuses(body.get("statuses") or [])})
+        return self._send(404, {"error": "not found"})
 
     # ------------------------------------------------------------ delivery
     @staticmethod
