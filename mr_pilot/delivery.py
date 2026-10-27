@@ -405,6 +405,7 @@ class Delivery:
             f["mrs"].append(self._mr_item(r))
         feats = sorted(features.values(), key=lambda f: (-(f["merged"] + f["open"]), f["name"]))
         for f in feats:
+            f["people"].sort()
             f["kind"] = _group_kind(f["mrs"])
             del f["mrs"]
         return {"period": {"kind": kind, "start": s, "end": e, "label": label,
