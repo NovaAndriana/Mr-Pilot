@@ -64,6 +64,17 @@ DEFAULTS = {
         "confirm_if_open_threads": True,
     },
     "merge_order": {"enabled": True, "max_mrs": 30, "comment_on_affected": True},
+    "delivery": {
+        "enabled": True,
+        "group_by": "ai",            # ai | label | milestone | ticket
+        "label_prefix": "",          # group_by label: hanya label berawalan ini, mis. "feature::"
+        "include_open": True,        # tampilkan juga MR yang masih berjalan
+        "weekly_telegram": True,
+        "weekly_day": "fri",         # mon..sun
+        "weekly_time": "16:00",
+        "team": [],                  # [{username, name, team}]; bisa juga diisi dari dashboard → Delivery tim
+        "teams_order": ["BE", "FE", "Mobile", "QA"],
+    },
     "security": {"enabled": True, "projects": [], "branch": "", "interval_minutes": 30, "mr_check": True,
                  "alert_min_severity": "high", "auto_project_days": 120},
     "dora": {"enabled": True, "projects": [], "source": "auto", "environment": "auto", "production_branch": "",
@@ -316,13 +327,22 @@ def validate(cfg):
             re.compile(cfg["dora"]["fix_pattern"])
         except re.error as ex:
             raise ConfigError(f"dora.fix_pattern bukan regex yang valid: {ex}") from None
+    dl = cfg["delivery"]
+    dl["group_by"] = str(dl.get("group_by") or "ai").strip().lower()
+    if dl["group_by"] not in ("ai", "label", "milestone", "ticket"):
+        raise ConfigError("delivery.group_by harus ai | label | milestone | ticket")
+    if str(dl.get("weekly_day") or "fri").lower()[:3] not in ("mon", "tue", "wed", "thu", "fri", "sat", "sun"):
+        raise ConfigError("delivery.weekly_day harus mon | tue | wed | thu | fri | sat | sun")
+    if not isinstance(dl.get("team") or [], list):
+        raise ConfigError("delivery.team harus daftar, mis. [{username: septyan, name: Mas Septyan, team: BE}]")
     for sec in ("security", "dora"):
         if not isinstance(cfg[sec].get("projects") or [], list):
             raise ConfigError(f"{sec}.projects harus daftar, mis. [\"grup/repo\"]")
     if isinstance(cfg["dora"].get("incident_labels"), str):
         cfg["dora"]["incident_labels"] = [x.strip() for x in cfg["dora"]["incident_labels"].split(",") if x.strip()]
     for k in ("gitlab.verify_ssl", "code_quality.enabled", "dashboard.enabled", "security.enabled", "dora.enabled",
-              "security.mr_check", "dora.weekly_report"):
+              "security.mr_check", "dora.weekly_report", "delivery.enabled", "delivery.weekly_telegram",
+              "delivery.include_open"):
         a, b = k.split(".")
         v = cfg[a][b]
         if isinstance(v, str):
