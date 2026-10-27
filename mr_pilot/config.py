@@ -64,6 +64,12 @@ DEFAULTS = {
         "confirm_if_open_threads": True,
     },
     "merge_order": {"enabled": True, "max_mrs": 30, "comment_on_affected": True},
+    "daily": {
+        "enabled": True,
+        "statuses": ["Open", "In Progress", "Code Review", "Ready for QA", "SIT", "UAT", "Done", "Blocked",
+                     "On Hold", "Belum dikonfirmasi"],   # bisa ditambah dari dashboard
+        "link_base": "",             # mis. https://idas.atlassian.net/browse/ (otomatis dari teks yang ditempel)
+    },
     "delivery": {
         "enabled": True,
         "group_by": "ai",            # ai | label | milestone | ticket
@@ -334,7 +340,7 @@ def validate(cfg):
     if str(dl.get("weekly_day") or "fri").lower()[:3] not in ("mon", "tue", "wed", "thu", "fri", "sat", "sun"):
         raise ConfigError("delivery.weekly_day harus mon | tue | wed | thu | fri | sat | sun")
     if not isinstance(dl.get("team") or [], list):
-        raise ConfigError("delivery.team harus daftar, mis. [{username: septyan, name: Mas Septyan, team: BE}]")
+        raise ConfigError("delivery.team harus daftar, mis. [{username: budi, name: Mas Budi, team: BE}]")
     for sec in ("security", "dora"):
         if not isinstance(cfg[sec].get("projects") or [], list):
             raise ConfigError(f"{sec}.projects harus daftar, mis. [\"grup/repo\"]")

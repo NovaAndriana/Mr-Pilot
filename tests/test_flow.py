@@ -45,7 +45,7 @@ def mr_fixture(sha="abc", state="opened", pipeline="success"):
     return {"id": 1, "iid": 375, "project_id": 7, "sha": sha, "state": state,
             "title": "feat(IDAS-5323): show per user quota usage in workflow balance deduction",
             "description": DESC, "created_at": "2026-10-06T04:20:00Z", "source_branch": "feat/IDAS-5323-quota",
-            "target_branch": "staging", "author": {"name": "Arfandy Nugraha", "username": "arfandy"},
+            "target_branch": "staging", "author": {"name": "Rudi Nugraha", "username": "rudi"},
             "references": {"short": "!375", "full": "idas/idas-repo-be!375"},
             "web_url": "https://code.idas.id/idas/idas-repo-be/-/merge_requests/375",
             "head_pipeline": {"status": pipeline}, "changes_count": "26", "has_conflicts": False}
@@ -137,7 +137,7 @@ def test_card_has_detail():
     app, gl, tg = make_app()
     app.poll_gitlab()
     card = tg.sent[-1][1]
-    for s in ("Arfandy Nugraha (@arfandy)", "Masalah yang diselesaikan", "Bentuk baru",
+    for s in ("Rudi Nugraha (@rudi)", "Masalah yang diselesaikan", "Bentuk baru",
               "Yang sudah bagus", "Security fix", "Jira IDAS-5323"):
         assert s in card, s
 
@@ -199,8 +199,8 @@ def test_diff_ignore_and_limit():
 
 def test_teams_template():
     ctx = build_context(mr_fixture())
-    assert ctx["jira"] == "IDAS-5323" and ctx["author_first"] == "Arfandy"
-    assert render("MR {ref} ({jira}) by {author_first} {nope}", ctx) == "MR !375 (IDAS-5323) by Arfandy"
+    assert ctx["jira"] == "IDAS-5323" and ctx["author_first"] == "Rudi"
+    assert render("MR {ref} ({jira}) by {author_first} {nope}", ctx) == "MR !375 (IDAS-5323) by Rudi"
 
 
 def test_message_is_valid_length():
@@ -221,7 +221,7 @@ def test_full_flow_merge():
     app.on_callback({"id": "c1", "from": {"id": 42}, "data": "m|7|375", "message": {"message_id": msg_id}})
     assert gl.approved and gl.merged
     assert any("Merged" in t for _, t in tg.edits)
-    assert any("Arfandy" in t for _, t, _ in tg.sent[1:])  # Teams text for copy
+    assert any("Rudi" in t for _, t, _ in tg.sent[1:])  # Teams text for copy
 
 
 def test_unauthorized_user_cannot_merge():

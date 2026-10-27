@@ -74,6 +74,13 @@ merge:
   confirm_if_order: true          # minta konfirmasi kedua jika ada MR lain yang harus di-merge duluan
   confirm_if_open_threads: true   # minta konfirmasi kedua jika komentar error/risiko dari MR Pilot belum diperbaiki
 
+daily:
+  # Daily check jam 9: tempel teks review dari Teams (dirapikan otomatis) atau isi manual di dashboard ->
+  # Daily task. Tombol "Salin untuk Teams" mengembalikan format yang sama.
+  enabled: true
+  statuses: [Open, In Progress, Code Review, Ready for QA, SIT, UAT, Done, Blocked, On Hold, Belum dikonfirmasi]
+  link_base: ""                   # kosong = diambil dari link di teks yang ditempel
+
 delivery:
   # Laporan pekerjaan tim untuk atasan: per tim (BE/FE/Mobile/QA) -> per orang -> per fitur -> MR-nya.
   # Hanya MR yang masuk ke Anda (yang tercatat di MR Pilot). Lihat dashboard -> Delivery tim.
@@ -85,8 +92,8 @@ delivery:
   weekly_day: fri                 # mon | tue | wed | thu | fri | sat | sun
   weekly_time: "16:00"
   team: []                        # bisa diisi dari dashboard; contoh:
-  #  - {username: septyan, name: Mas Septyan, team: BE}
-  #  - {username: arfandy, name: Mas Arfandy, team: BE}
+  #  - {username: budi, name: Mas Budi, team: BE}
+  #  - {username: sari, name: Mbak Sari, team: FE}
   teams_order: [BE, FE, Mobile, QA]
 
 merge_order:

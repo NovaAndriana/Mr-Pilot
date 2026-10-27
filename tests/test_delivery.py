@@ -44,22 +44,22 @@ class FakeAI:
 def make(tmp_path=None, ai=None, mode="ai"):
     cfg = copy.deepcopy(DEFAULTS)
     cfg["delivery"]["group_by"] = mode
-    cfg["delivery"]["team"] = [{"username": "septyan", "name": "Mas Septyan", "team": "BE"},
-                               {"username": "arfandy", "name": "Mas Arfandy", "team": "BE"},
-                               {"username": "dede", "name": "Mas Dede", "team": "Mobile"}]
+    cfg["delivery"]["team"] = [{"username": "joko", "name": "Mas Joko", "team": "BE"},
+                               {"username": "rudi", "name": "Mas Rudi", "team": "BE"},
+                               {"username": "sari", "name": "Mbak Sari", "team": "Mobile"}]
     store = Store(":memory:")
     return Delivery(cfg, store, ai), store
 
 
 def seed(store):
-    add(store, 1, "feat(IDAS-5413): add quota bundle to price order", "septyan", "Septyan D N",
+    add(store, 1, "feat(IDAS-5413): add quota bundle to price order", "joko", "Joko S",
         labels=["feature::Kuota bundle"], milestone="Sprint 21")
-    add(store, 2, "fix(IDAS-5420): quota bundle shows 0 on old app", "septyan", "Septyan D N",
+    add(store, 2, "fix(IDAS-5420): quota bundle shows 0 on old app", "joko", "Joko S",
         labels=["feature::Kuota bundle", "bug"], milestone="Sprint 21")
-    add(store, 3, "IDAS-5327/fix role signature", "arfandy", "Arfandy Surya", branch="fix/IDAS-5327-role-signature")
-    add(store, 4, "feat(IDAS-5500): dynamic role screen", "dede", "Dede", status="notified")
+    add(store, 3, "IDAS-5327/fix role signature", "rudi", "Rudi H", branch="fix/IDAS-5327-role-signature")
+    add(store, 4, "feat(IDAS-5500): dynamic role screen", "sari", "Sari", status="notified")
     add(store, 5, "chore: bump sdk", "budi", "Budi")
-    add(store, 6, "feat(IDAS-1): last month", "septyan", "Septyan", day=date(2026, 9, 10))
+    add(store, 6, "feat(IDAS-1): last month", "joko", "Joko", day=date(2026, 9, 10))
 
 
 def test_helpers():
@@ -86,18 +86,18 @@ def test_ai_groups_team_person_feature():
     assert rep["totals"]["mrs"] == 5 and rep["totals"]["merged"] == 4 and rep["totals"]["open"] == 1
     assert [t["team"] for t in rep["teams"]] == ["BE", "Mobile", "Belum terdaftar"]
     be = rep["teams"][0]
-    sep = next(p for p in be["people"] if p["name"] == "Mas Septyan")
+    sep = next(p for p in be["people"] if p["name"] == "Mas Joko")
     assert [g["name"] for g in sep["groups"]] == ["Kuota bundle e-meterai"]
     assert [m["kind"] for m in sep["groups"][0]["mrs"]] == ["feature", "bugfix"] and sep["groups"][0]["kind"] == "feature"
     assert sep["counts"]["feature"] == 1 and sep["counts"]["bugfix"] == 1
     feat = {f["name"]: f for f in rep["features"]}
-    assert feat["Tanda tangan per role"]["people"] == ["Mas Arfandy", "Mas Dede"]
+    assert feat["Tanda tangan per role"]["people"] == ["Mas Rudi", "Mbak Sari"]
     assert rep["unregistered"] == [{"username": "budi", "name": "Budi"}]
     # cached per MR: a second build doesn't ask the AI again
     n = len(ai.calls)
     dl.build("this_week", today=TODAY)
     assert len(ai.calls) == n
-    assert ai.calls[0][2] == "delivery" and "Septyan" not in ai.calls[0][1], "nama orang tidak dikirim ke AI"
+    assert ai.calls[0][2] == "delivery" and "Joko" not in ai.calls[0][1], "nama orang tidak dikirim ke AI"
 
 
 def test_manual_edit_and_rename_win():
@@ -109,15 +109,15 @@ def test_manual_edit_and_rename_win():
     dl.set_override("7:3", group="Kuota", kind="feature")
     dl.rename_group("Kuota", "Kuota bundle e-meterai")
     rep = dl.build("this_week", today=TODAY)
-    arf = next(p for t in rep["teams"] for p in t["people"] if p["name"] == "Mas Arfandy")
+    arf = next(p for t in rep["teams"] for p in t["people"] if p["name"] == "Mas Rudi")
     g = arf["groups"][0]
     assert g["name"] == "Kuota bundle e-meterai" and g["mrs"][0]["kind"] == "feature" and g["source"] == "manual"
-    sep = next(p for t in rep["teams"] for p in t["people"] if p["name"] == "Mas Septyan")
+    sep = next(p for t in rep["teams"] for p in t["people"] if p["name"] == "Mas Joko")
     assert sep["groups"][0]["name"] == "Kuota bundle e-meterai"
     # regroup asks the AI again but keeps the manual edit
     ai.groups["7:3"] = ("Role", "bugfix")
     rep = dl.build("this_week", today=TODAY, regroup=True)
-    arf = next(p for t in rep["teams"] for p in t["people"] if p["name"] == "Mas Arfandy")
+    arf = next(p for t in rep["teams"] for p in t["people"] if p["name"] == "Mas Rudi")
     assert arf["groups"][0]["name"] == "Kuota bundle e-meterai"
 
 
@@ -126,9 +126,9 @@ def test_label_milestone_ticket_modes_and_ai_failure():
     seed(store)
     dl.set_mode("label", "feature::")
     rep = dl.build("this_week", today=TODAY)
-    sep = next(p for t in rep["teams"] for p in t["people"] if p["name"] == "Mas Septyan")
+    sep = next(p for t in rep["teams"] for p in t["people"] if p["name"] == "Mas Joko")
     assert sep["groups"][0]["name"] == "Kuota bundle" and len(sep["groups"][0]["mrs"]) == 2
-    arf = next(p for t in rep["teams"] for p in t["people"] if p["name"] == "Mas Arfandy")
+    arf = next(p for t in rep["teams"] for p in t["people"] if p["name"] == "Mas Rudi")
     assert arf["groups"][0]["name"].startswith("IDAS-5327"), "tanpa label: per tiket"
     dl.set_mode("milestone")
     rep = dl.build("this_week", today=TODAY)
@@ -149,9 +149,9 @@ def test_label_milestone_ticket_modes_and_ai_failure():
 def test_team_from_dashboard_overrides_config():
     dl, store = make(mode="ticket")
     seed(store)
-    dl.save_team([{"username": "@budi", "name": "Mas Budi", "team": "FE"}, {"username": "septyan", "name": "Septyan"},
+    dl.save_team([{"username": "@budi", "name": "Mas Budi", "team": "FE"}, {"username": "joko", "name": "Joko"},
                   {"username": "budi"}])
-    assert [m["username"] for m in dl.team()] == ["budi", "septyan"] and dl.team()[1]["team"] == "Lainnya"
+    assert [m["username"] for m in dl.team()] == ["budi", "joko"] and dl.team()[1]["team"] == "Lainnya"
     rep = dl.build("this_week", today=TODAY)
     assert "FE" in [t["team"] for t in rep["teams"]]
 
@@ -163,12 +163,12 @@ def test_text_docx_and_weekly(tmp_path):
     dl.send = sent.append
     rep = dl.build("this_week", today=TODAY)
     txt = dl.text(rep, html=False)
-    assert "Tim BE" in txt and "Mas Septyan" in txt and "<b>" not in txt and "4 MR selesai, 1 masih berjalan" in txt
+    assert "Tim BE" in txt and "Mas Joko" in txt and "<b>" not in txt and "4 MR selesai, 1 masih berjalan" in txt
     assert "<b>Tim BE</b>" in dl.text(rep, html=True)
     blob = dl.docx(rep)
     z = zipfile.ZipFile(io.BytesIO(blob))
     doc = z.read("word/document.xml").decode()
-    assert "Laporan Delivery Tim" in doc and "Mas Septyan" in doc and "!1 feat(IDAS-5413)" in doc
+    assert "Laporan Delivery Tim" in doc and "Mas Joko" in doc and "!1 feat(IDAS-5413)" in doc
     assert {"[Content_Types].xml", "word/styles.xml", "word/numbering.xml"} <= set(z.namelist())
     # weekly: Friday 16:00, once per week
     fri = ts(date(2026, 10, 30), 16) + 60
@@ -185,10 +185,10 @@ def test_enrich_old_records():
         def get_mr(self, pid, iid):
             self.n += 1
             return {"labels": ["feature::Kuota"], "milestone": {"title": "S1"}, "description": "x",
-                    "merged_at": "2026-10-27T03:00:00Z", "author": {"name": "S", "username": "septyan"}}
+                    "merged_at": "2026-10-27T03:00:00Z", "author": {"name": "S", "username": "joko"}}
     dl, store = make(mode="label")
     store.upsert("7:9", project_id=7, iid=9, title="feat: x", status="merged", decided_at=ts(date(2026, 10, 27)),
-                 author_username="septyan", author="S")
+                 author_username="joko", author="S")
     dl.gl = GL()
     rep = dl.build("this_week", today=TODAY)
     assert dl.gl.n == 1 and rep["features"][0]["name"] == "feature::Kuota"
@@ -203,8 +203,8 @@ def test_dashboard_routes():
     cfg["delivery"]["group_by"] = "ticket"
     store = Store(":memory:")
     today = date.today()
-    add(store, 1, "feat(IDAS-5413): add quota bundle", "septyan", "Septyan", day=today)
-    add(store, 2, "fix(IDAS-5413): quota zero", "septyan", "Septyan", day=today)
+    add(store, 1, "feat(IDAS-5413): add quota bundle", "joko", "Joko", day=today)
+    add(store, 2, "fix(IDAS-5413): quota zero", "joko", "Joko", day=today)
     srv, base = _serve(cfg, store)
     h = {"X-MRPilot": "1"}
     try:
@@ -215,10 +215,10 @@ def test_dashboard_routes():
         assert _req(base + "/api/delivery?period=custom&from=2026-1-1")[0] == 400
         assert _req(base + "/api/delivery/team", "PUT", {"members": []})[0] == 403, "CSRF header wajib"
         code, body, _ = _req(base + "/api/delivery/team", "PUT",
-                             {"members": [{"username": "septyan", "name": "Mas Septyan", "team": "BE"}]}, h)
+                             {"members": [{"username": "joko", "name": "Mas Joko", "team": "BE"}]}, h)
         assert code == 200
         rep = json.loads(_req(base + "/api/delivery")[1])
-        assert rep["teams"][0]["team"] == "BE" and rep["teams"][0]["people"][0]["name"] == "Mas Septyan"
+        assert rep["teams"][0]["team"] == "BE" and rep["teams"][0]["people"][0]["name"] == "Mas Joko"
         g = rep["features"][0]["name"]
         assert _req(base + "/api/delivery/rename", "POST", {"old": g, "new": "Kuota bundle"}, h)[0] == 200
         assert _req(base + "/api/delivery/override", "POST", {"key": "x", "group": "a"}, h)[0] == 400
@@ -229,6 +229,6 @@ def test_dashboard_routes():
         code, body, hdr = _req(base + "/api/delivery.docx")
         assert code == 200 and body[:2] == b"PK" and "attachment" in hdr["Content-Disposition"]
         code, body, _ = _req(base + "/api/delivery.txt")
-        assert code == 200 and "Mas Septyan" in body.decode()
+        assert code == 200 and "Mas Joko" in body.decode()
     finally:
         srv.shutdown()

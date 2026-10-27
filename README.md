@@ -415,3 +415,14 @@ Dashboard → **Delivery tim** menunjukkan apa saja yang dikerjakan setiap orang
 - **Edit:** tombol *Edit pengelompokan* untuk memindahkan MR ke grup lain atau mengganti jenisnya, dan *Ganti nama* untuk nama grup. Edit manual selalu menang dan tetap berlaku di periode berikutnya.
 - **Anggota tim:** isi di bagian bawah halaman (username GitLab → nama di laporan → tim) atau di `delivery.team`. Author yang belum terdaftar muncul di *Belum terdaftar* dengan tombol tambah.
 - **Bentuk laporan:** *Unduh Word* (.docx siap kirim), *Cetak / PDF*, *Salin teks* (untuk Teams), dan ringkasan Telegram mingguan (`weekly_day`, `weekly_time`, default Jumat 16:00). Perintah Telegram: `/delivery` (minggu ini), `/delivery lalu`, `/delivery bulan`, `/delivery bulanlalu`.
+
+## Daily task (review jam 9)
+
+Dashboard → **Daily task** untuk review pekerjaan tim setiap pagi, dengan format yang sama seperti pesan Daily Check di Teams.
+
+- **Tempel teks Teams** (boleh beberapa tim sekaligus): tim, tanggal, group, versi, PIC, tiket, subtask, item tanpa tiket, dan scope analisis terbaca otomatis. Sebelum disimpan, ditunjukkan apa saja yang dirapikan: nama status (`In Progres` → `In Progress`), salah ketik umum (`bvelum`, `pemyesuaian`, `pengherjaan`, ...), link yang kosong dibuat dari nomor tiket, variasi "belum ada blocker", dan persentase dari teks progress. Centang *Rapikan ejaan dengan AI* untuk koreksi ejaan yang lebih luas (perubahan yang mengubah makna ditolak).
+- **Isi manual**: setiap kolom bisa diedit langsung dan tersimpan otomatis. *Tambah task* / *Ubah* untuk tiket, judul, link, tim, group, PIC.
+- **Lanjutkan dari kemarin**: task yang belum Done dibawa ke hari baru, jadi yang tidak di-update terlihat *sama dengan kemarin*.
+- **Perlu ditanyakan** (dicek otomatis): status bertentangan dengan progress, next action hasil salin dari task lain, link mengarah ke tiket lain, tanggal "besok" yang sudah lewat, progress tidak berubah 3 hari, blocker yang sama 3 hari (perlu eskalasi), status Code Review tanpa MR, MR sudah merged tapi status masih In Progress, pipeline MR gagal. Bukti GitLab diambil dari MR yang masuk ke Anda.
+- **Daftar status** bisa ditambah atau dihapus di halaman (`daily.statuses`).
+- **Salin untuk Teams**: semua tim atau satu tim, format sama dengan yang biasa Anda kirim, sudah dirapikan.

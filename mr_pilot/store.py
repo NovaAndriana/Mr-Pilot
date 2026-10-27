@@ -65,6 +65,15 @@ class Store:
                 ref TEXT, finished_at REAL, n_commits INTEGER, lead_median REAL, lead_values TEXT,
                 fix_commit INTEGER DEFAULT 0, rollback INTEGER DEFAULT 0, web_url TEXT, title TEXT);
             CREATE INDEX IF NOT EXISTS ix_dora_ts ON dora_deploys(project_id, finished_at);
+            CREATE TABLE IF NOT EXISTS daily_tasks(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ticket TEXT, title TEXT, link TEXT, team TEXT, grp TEXT,
+                pic TEXT, parent_id INTEGER, scope TEXT, ord REAL, active INTEGER DEFAULT 1,
+                created_at REAL, updated_at REAL);
+            CREATE INDEX IF NOT EXISTS ix_daily_ticket ON daily_tasks(ticket);
+            CREATE TABLE IF NOT EXISTS daily_entries(
+                task_id INTEGER, day TEXT, progress TEXT, pct INTEGER, status TEXT, status_note TEXT,
+                next_action TEXT, blocker TEXT, waiting_on TEXT, updated_at REAL, PRIMARY KEY(task_id, day));
+            CREATE INDEX IF NOT EXISTS ix_daily_day ON daily_entries(day);
             CREATE TABLE IF NOT EXISTS dora_incidents(
                 key TEXT PRIMARY KEY, project_id INTEGER, project TEXT, title TEXT, created_at REAL,
                 closed_at REAL, web_url TEXT);
@@ -222,7 +231,9 @@ class Store:
 
     # kv entries that are NOT history: GitLab "already posted" markers (prevent duplicate comments),
     # logged-out sessions, Telegram update offset, cached GitLab username
-    KEEP_KV = ("cq_%", "threads:%", "sugg:%", "revoked_sessions", "tg_offset", "gitlab_user")
+    # work data the lead typed in (team list, delivery edits, daily check settings) survives a reset
+    KEEP_KV = ("cq_%", "threads:%", "sugg:%", "revoked_sessions", "tg_offset", "gitlab_user",
+               "delivery_%", "dl_%", "daily_%")
 
     HISTORY_TABLES = ("mrs", "events", "violations", "ai_calls", "sec_findings", "sec_projects", "dora_deploys",
                       "dora_incidents")
