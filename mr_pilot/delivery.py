@@ -521,7 +521,7 @@ def build_docx(rep):
         body.append(f"<w:p>{ppr}{xml}</w:p>")
 
     t = rep["totals"]
-    para(f"Laporan Delivery Tim", "Title")
+    para("Laporan Delivery Tim", "Title")
     para(f"Periode {rep['period']['label']}", None, color="555555")
     para("Ringkasan", "Heading1")
     para(f"{t['merged']} MR selesai (merged)" + (f", {t['open']} masih berjalan" if t["open"] else "")
