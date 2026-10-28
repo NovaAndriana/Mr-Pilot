@@ -274,6 +274,27 @@ def tidy(parsed, statuses=None, link_base=""):
     return out
 
 
+AI_FIX_PROMPT = ("Perbaiki HANYA salah ketik dan ejaan bahasa Indonesia pada setiap teks. Jangan mengubah makna, "
+                 "jangan menambah informasi, jangan menerjemahkan istilah teknis (MR, API, QA, SIT, deploy, push, "
+                 "nama orang, nomor tiket). Kembalikan hanya yang berubah. Jawab HANYA JSON: "
+                 '{"items": [{"id": "...", "text": "..."}]}')
+
+
+def ai_fix(ai, items):
+    """items [{id, text}] -> {id: corrected} for small spelling fixes only (big rewrites are dropped)."""
+    if not items or not ai:
+        return {}
+    raw, _ = ai.complete(AI_FIX_PROMPT, json.dumps(items, ensure_ascii=False), "daily", validate=extract_json)
+    orig = {x["id"]: x["text"] for x in items}
+    out = {}
+    for x in extract_json(raw).get("items") or []:
+        k, new = str(x.get("id") or ""), str(x.get("text") or "").strip()
+        if k in orig and new and new != orig[k] and \
+                difflib.SequenceMatcher(None, orig[k].lower(), new.lower()).ratio() >= 0.75:
+            out[k] = new
+    return out
+
+
 def ai_polish(ai, parsed):
     """Spelling pass by the AI (optional): only typos/grammar, never the meaning. -> corrections."""
     items = []
@@ -282,21 +303,9 @@ def ai_polish(ai, parsed):
             v = t["fields"].get(k)
             if v and v != "-":
                 items.append({"id": f"{i}:{k}", "text": v})
-    if not items or not ai:
-        return []
-    system = ("Perbaiki HANYA salah ketik dan ejaan bahasa Indonesia pada setiap teks. Jangan mengubah makna, "
-              "jangan menambah informasi, jangan menerjemahkan istilah teknis (MR, API, QA, SIT, deploy, push, "
-              "nama orang, nomor tiket). Kembalikan hanya yang berubah. Jawab HANYA JSON: "
-              '{"items": [{"id": "...", "text": "..."}]}')
-    raw, _ = ai.complete(system, json.dumps(items, ensure_ascii=False), "daily", validate=extract_json)
     out = []
     orig = {x["id"]: x["text"] for x in items}
-    for x in extract_json(raw).get("items") or []:
-        k, new = str(x.get("id") or ""), str(x.get("text") or "").strip()
-        if k not in orig or not new or new == orig[k]:
-            continue
-        if difflib.SequenceMatcher(None, orig[k].lower(), new.lower()).ratio() < 0.75:
-            continue  # rewrote too much: not a typo fix
+    for k, new in ai_fix(ai, items).items():
         i, field = k.split(":", 1)
         parsed["tasks"][int(i)]["fields"][field] = tidy_sentence(new)
         out.append({"i": int(i), "field": field, "before": orig[k], "after": tidy_sentence(new), "why": "ejaan (AI)"})
@@ -500,7 +509,8 @@ class Daily:
                            (*vals.values(), ord_, now, now))
         return self.store.query("SELECT MAX(id) id FROM daily_tasks")[0]["id"]
 
-    def save_entry(self, task_id, day, f):
+    def save_entry(self, task_id, day, f, use_ai=False):
+        """Upsert one day's entry; text is auto-corrected. -> [{field, before, after, why}]."""
         if not self.store.query("SELECT 1 FROM daily_tasks WHERE id=?", (task_id,)):
             raise ValueError("task tidak ditemukan")
         date.fromisoformat(day)
@@ -516,9 +526,31 @@ class Daily:
                 e["status_note"] = note
             elif "status_note" in f:
                 e["status_note"] = f["status_note"]
+        corr = []
+        if "status" in f and f["status"] is not None and str(f["status"]).strip():
+            shown = e["status"] + (f" — {e['status_note']}" if e.get("status_note") else "")
+            raw = str(f["status"]).strip().rstrip(".")
+            if raw.lower() != shown.lower() and raw.split(" — ")[0].strip().lower() != e["status"].lower():
+                corr.append({"field": "status", "before": raw, "after": e["status"], "why": "nama status disamakan"})
+        texts = {}
         for k in ("progress", "next_action", "blocker"):
             if k in f and f[k] is not None:
-                e[k] = tidy_sentence(fix_typos(str(f[k]))[0])
+                fixed, typos = fix_typos(str(f[k]))
+                e[k] = tidy_sentence(fixed)
+                texts[k] = e[k]
+                if typos:
+                    corr.append({"field": k, "before": str(f[k]), "after": e[k],
+                                 "why": "salah ketik: " + ", ".join(f"{a} → {b}" for a, b in typos)})
+        if use_ai and self.ai:
+            try:
+                fixed = ai_fix(self.ai, [{"id": k, "text": v} for k, v in texts.items() if v and v != "-"])
+            except Exception as ex:
+                log.info("AI ejaan gagal: %s", short_error(ex))
+                fixed = {}
+            for k, new in fixed.items():
+                before = e[k]
+                e[k] = tidy_sentence(new)
+                corr.append({"field": k, "before": before, "after": e[k], "why": "ejaan (AI)"})
         if e.get("blocker") and is_none_blocker(e["blocker"]):
             e["blocker"] = "-"
         if "pct" in f and f["pct"] not in (None, ""):
@@ -533,6 +565,7 @@ class Daily:
                            (task_id, day, e.get("progress") or "", e.get("pct"), e.get("status") or "",
                             e.get("status_note") or "", e.get("next_action") or "-", e.get("blocker") or "-",
                             (e.get("waiting_on") or "")[:80], time.time()))
+        return corr
 
     def remove_entry(self, task_id, day):
         self.store.execute("DELETE FROM daily_entries WHERE task_id=? AND day=?", (task_id, day))

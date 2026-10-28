@@ -58,6 +58,14 @@
   .form2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   .form2 .wide { grid-column:1 / -1; }
   .highlight { outline:2px solid var(--accent); outline-offset:2px; }
+  .ctrl-ai { display:inline-flex; gap:6px; align-items:center; font-size:13px; color:var(--ink-2); }
+  .block-h .add { margin-left:auto; }
+  .newtask { border:1px dashed var(--accent); background:var(--accent-soft); }
+  .newtask .fgrid { grid-template-columns:140px 2fr 1.2fr; }
+  @media (max-width: 760px) { .newtask .fgrid { grid-template-columns:1fr; } }
+  .fixed { animation:fixedflash 1.6s ease-out; }
+  @keyframes fixedflash { 0% { background:var(--add-soft); } 100% { background:var(--surface-2); } }
+  .corr-note { font-size:12px; color:var(--add); margin-top:6px; }
 </style>
 </head>
 <body>
@@ -100,6 +108,7 @@
     </div>
     <span style="flex:1"></span>
     <button class="btn ghost sm" id="carry" hidden></button>
+    <label class="ctrl-ai" title="Selain koreksi bawaan (status, salah ketik umum), ejaan juga dirapikan AI saat menyimpan"><input type="checkbox" id="ai-fix"> Auto-correct AI</label>
     <button class="btn ghost sm" id="open-paste">Tempel teks Teams</button>
     <button class="btn ghost sm" id="open-add">Tambah task</button>
     <select id="copy-team" aria-label="Tim yang disalin"><option value="">Semua tim</option></select>
@@ -247,14 +256,18 @@ function renderBoard() {
   const teams = data.teams.filter(t => !team || t.team === team);
   $("#board").innerHTML = teams.map(tm => `<h2 class="team-h">Tim ${esc(tm.team)}</h2>` + tm.groups.map(g =>
     (g.name ? `<div class="grp-h">GROUP ${esc(g.name)}${(data.groups_meta[g.name] || {}).version ? " · Versi " + esc(data.groups_meta[g.name].version) : ""}</div>` : "") +
-    g.blocks.map(b => (b.kind === "pic" ? `<div class="block-h">PIC: ${esc(b.name)}<span class="muted" style="font-weight:400;font-size:12px">${b.tasks.length} task</span></div>` : `<div class="block-h"><span class="muted" style="font-weight:400;font-size:12px">Tanpa PIC</span></div>`) +
-      b.tasks.map(t => taskHtml(t, false)).join("")).join("")).join("")).join("")
+    g.blocks.map(b => `<div class="blk" data-team="${esc(tm.team)}" data-grp="${esc(g.name)}" data-pic="${esc(b.kind === "pic" ? b.name : "")}">` +
+      (b.kind === "pic" ? `<div class="block-h">PIC: ${esc(b.name)}<span class="muted" style="font-weight:400;font-size:12px">${b.tasks.length} task</span><button class="linkbtn add">+ Tambah task untuk ${esc(b.name)}</button></div>`
+        : `<div class="block-h"><span class="muted" style="font-weight:400;font-size:12px">Tanpa PIC</span></div>`) +
+      b.tasks.map(t => taskHtml(t, false)).join("") + `<div class="slot"></div></div>`).join("") +
+    `<div class="blk" data-team="${esc(tm.team)}" data-grp="${esc(g.name)}" data-pic="" data-newpic="1"><div class="block-h"><button class="linkbtn add" style="margin-left:0">+ Tambah task untuk PIC lain di ${esc(g.name ? "group ini" : "tim " + tm.team)}</button></div><div class="slot"></div></div>`).join("")).join("")
     || `<div class="empty" style="margin-top:24px"><strong>Belum ada task untuk ${esc(data.day_label)}</strong>${data.prev_day ? `Tekan <b>Lanjutkan dari ${esc(data.prev_day)}</b> untuk membawa task yang belum selesai, ` : ""}tempel teks dari Teams, atau tambah task manual.</div>`;
   $("#board").querySelectorAll("textarea").forEach(autoGrow);
   $("#board").querySelectorAll("[data-f]").forEach(inp => {
     inp.addEventListener("input", () => { if (inp.tagName === "TEXTAREA") autoGrow(inp); });
     inp.addEventListener("change", () => saveField(inp));
   });
+  $("#board").querySelectorAll(".blk .add").forEach(b => b.onclick = () => openNewTask(b.closest(".blk")));
   $("#board").querySelectorAll(".ed").forEach(b => b.onclick = () => {
     const t = allTasks().find(x => x.id === +b.dataset.id); if (!t) return;
     editing = t;
@@ -275,8 +288,9 @@ async function saveField(inp) {
   const id = +inp.closest("[data-id]").dataset.id, entry = { [inp.dataset.f]: inp.value };
   inp.classList.add("saving");
   try {
-    const fresh = await api("/api/daily/entry", { method: "POST", body: JSON.stringify({ day, task_id: id, entry }) });
+    const fresh = await api("/api/daily/entry", { method: "POST", body: JSON.stringify({ day, task_id: id, entry, ai: $("#ai-fix").checked }) });
     data = fresh;
+    showCorrections(fresh.corrections, document.getElementById("t-" + id));
     const t = allTasks().find(x => x.id === id);
     if (t) {
       document.getElementById("w-" + id).innerHTML = warnHtml(t);
@@ -291,6 +305,58 @@ async function saveField(inp) {
     renderAttention();
   } catch (ex) { toast("Gagal menyimpan: " + ex.message); }
   inp.classList.remove("saving");
+}
+
+function showCorrections(corr, box) {
+  if (!corr || !corr.length) return;
+  const label = { progress: "Progress", next_action: "Next action", blocker: "Blocker", status: "Status" };
+  toast("Dirapikan otomatis: " + corr.map(c => `${label[c.field] || c.field} (${c.why})`).join("; "));
+  if (!box) return;
+  corr.forEach(c => {
+    const el = box.querySelector(`:scope > .fgrid [data-f="${c.field}"], :scope > .fgrid2 [data-f="${c.field}"]`);
+    if (el) { el.classList.remove("fixed"); void el.offsetWidth; el.classList.add("fixed"); }
+  });
+}
+
+function openNewTask(blk) {
+  const slot = blk.querySelector(".slot");
+  if (slot.innerHTML) { slot.querySelector("input").focus(); return; }
+  const needPic = !!blk.dataset.newpic;
+  slot.innerHTML = `<div class="task newtask">
+    <div class="task-h"><span class="tt">Task baru${blk.dataset.pic ? " · " + esc(blk.dataset.pic) : ""}</span></div>
+    <div class="fgrid">
+      ${needPic ? `<div class="fld"><label>PIC</label><input data-n="pic" list="dl-pic" placeholder="Mas ..."></div>` : ""}
+      <div class="fld"><label>Nomor tiket (opsional)</label><input data-n="ticket" placeholder="IDAS-1234"></div>
+      <div class="fld${needPic ? "" : " wide"}"><label>Judul</label><input data-n="title" placeholder="Judul task"></div>
+      <div class="fld"><label>Status</label><input data-n="status" list="dl-status" value="Open"></div>
+    </div>
+    <div class="fgrid2">
+      <div class="fld wide"><label>Progress</label><textarea rows="1" data-n="progress" placeholder="Belum dimulai."></textarea></div>
+      <div class="fld wide"><label>Next action</label><textarea rows="1" data-n="next_action"></textarea></div>
+      <div class="fld"><label>Blocker</label><textarea rows="1" data-n="blocker" placeholder="-"></textarea></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;align-items:center"><button class="btn sm save-new">Simpan task</button><button class="btn ghost sm cancel-new">Batal</button><span class="msg bad"></span></div></div>`;
+  const f = n => slot.querySelector(`[data-n="${n}"]`);
+  (needPic ? f("pic") : f("ticket")).focus();
+  slot.querySelector(".cancel-new").onclick = () => { slot.innerHTML = ""; };
+  slot.querySelectorAll("input,textarea").forEach(el => el.addEventListener("keydown", e => {
+    if (e.key === "Enter" && (el.tagName === "INPUT" || e.ctrlKey)) { e.preventDefault(); slot.querySelector(".save-new").click(); }
+  }));
+  slot.querySelector(".save-new").onclick = async () => {
+    const task = { team: blk.dataset.team, grp: blk.dataset.grp, pic: needPic ? f("pic").value.trim() : blk.dataset.pic,
+      ticket: f("ticket").value.trim(), title: f("title").value.trim() };
+    const entry = { status: f("status").value, progress: f("progress").value || "Belum dimulai.",
+      next_action: f("next_action").value || "-", blocker: f("blocker").value || "-" };
+    if (needPic && !task.pic) return slot.querySelector(".msg").textContent = "Isi nama PIC dulu.";
+    try {
+      const r = await api("/api/daily/task", { method: "POST", body: JSON.stringify({ day, task, entry, ai: $("#ai-fix").checked }) });
+      data = r; render();
+      const box = document.getElementById("t-" + r.id);
+      if (box) { box.scrollIntoView({ block: "center" }); box.classList.add("highlight"); setTimeout(() => box.classList.remove("highlight"), 1500); }
+      showCorrections(r.corrections, box);
+      if (!r.corrections || !r.corrections.length) toast("Task ditambahkan.");
+    } catch (ex) { slot.querySelector(".msg").textContent = ex.message; }
+  };
 }
 
 async function saveStatuses(list) {
@@ -370,6 +436,8 @@ $("#prev").onclick = () => data.prev_day && load(data.prev_day);
 $("#next").onclick = () => data.next_day && load(data.next_day);
 $("#today").onclick = () => load(localToday());
 $("#day").onchange = () => $("#day").value && load($("#day").value);
+$("#ai-fix").checked = store.get("daily-ai") === "1";
+$("#ai-fix").onchange = () => store.set("daily-ai", $("#ai-fix").checked ? "1" : "0");
 initTheme();
 load(day || localToday()).catch(ex => toast("Gagal memuat: " + ex.message));
 </script>
