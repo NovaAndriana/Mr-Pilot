@@ -659,12 +659,13 @@ class _Handler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/daily/task":
             t = body.get("task") or {}
             tid = dl.save_task(t)
+            corr = []
             if day and body.get("entry") is not None:
-                dl.save_entry(tid, day, body.get("entry") or {})
-            return self._send(200, {"id": tid, **(dl.day(day) if day else {})})
+                corr = dl.save_entry(tid, day, body.get("entry") or {}, bool(body.get("ai")))
+            return self._send(200, {"id": tid, **(dl.day(day) if day else {}), "corrections": corr})
         if method == "POST" and path == "/api/daily/entry":
-            dl.save_entry(int(body["task_id"]), day or "", body.get("entry") or {})
-            return self._send(200, dl.day(day))
+            corr = dl.save_entry(int(body["task_id"]), day or "", body.get("entry") or {}, bool(body.get("ai")))
+            return self._send(200, {**dl.day(day), "corrections": corr})
         if method == "POST" and path == "/api/daily/remove":
             dl.remove_entry(int(body["task_id"]), day or "")
             if body.get("archive"):

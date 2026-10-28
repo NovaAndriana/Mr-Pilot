@@ -300,3 +300,30 @@ def test_dashboard_routes():
         assert _req(base + "/api/daily/statuses", "PUT", {"statuses": []}, h)[0] == 400
     finally:
         srv.shutdown()
+
+
+def test_edit_returns_corrections_and_ai_option():
+    d, store = svc()
+    d.import_text(SAMPLE)
+    tid = d.save_task({"team": "FE", "grp": "FE — MAS BUDI & MBAK SARI", "pic": "Mbak Sari", "ticket": "ABC-150",
+                       "title": "Riwayat kuota"})
+    corr = d.save_entry(tid, "2026-10-23", {"status": "in progres", "progress": "pengherjaan 40%", "blocker": "bvelum ada"})
+    fields = {c["field"]: c for c in corr}
+    assert set(fields) == {"status", "progress", "blocker"} and fields["status"]["after"] == "In Progress"
+    row = store.query("SELECT * FROM daily_entries WHERE task_id=?", (tid,))[0]
+    assert (row["status"], row["progress"], row["pct"], row["blocker"]) == ("In Progress", "Pengerjaan 40%.", 40, "-")
+    assert d.save_entry(tid, "2026-10-23", {"next_action": "Lanjut testing."}) == [], "teks yang sudah rapi: tidak ada catatan"
+    # new task lands under its PIC in the same group
+    rep = d.day("2026-10-23")
+    blk = next(b for tm in rep["teams"] for g in tm["groups"] for b in g["blocks"] if b["name"] == "Mbak Sari")
+    assert [t["ticket"] for t in blk["tasks"]][-1] == "ABC-150"
+
+    class AI:
+        def complete(self, system, user, task="review", validate=None):
+            items = json.loads(user)
+            return json.dumps({"items": [{"id": x["id"], "text": x["text"].replace("di kerjakan", "dikerjakan")}
+                                         for x in items if "di kerjakan" in x["text"]]}), "fake"
+    d.ai = AI()
+    corr = d.save_entry(tid, "2026-10-23", {"progress": "masih di kerjakan"}, use_ai=True)
+    assert corr and corr[-1]["why"] == "ejaan (AI)" and corr[-1]["after"] == "Masih dikerjakan."
+    assert d.save_entry(tid, "2026-10-23", {"progress": "masih di kerjakan"}) == [], "tanpa AI: hanya koreksi bawaan"
