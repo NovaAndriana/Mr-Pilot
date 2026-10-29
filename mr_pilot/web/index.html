@@ -30,6 +30,7 @@
     <div class="status">
       <span class="live" id="live"><i></i><span id="live-t">Menghubungkan</span></span>
       <span class="hide-sm" id="poll"></span>
+      <span class="hide-sm" id="tg"></span>
       <button class="icon-btn" id="theme" title="Ganti tema" aria-label="Ganti tema terang/gelap">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
       </button>
@@ -266,6 +267,11 @@ function renderHealth(h) {
   const ok = h.last_poll_ok;
   $("#poll").textContent = ok ? "GitLab dicek " + ago(ok) : (h.last_poll_error ? "GitLab gagal dicek" : "GitLab belum dicek");
   $("#poll").title = h.last_poll_error || "";
+  // the bot long-polls every ≤25s: silence for >90s means it is not receiving taps/commands
+  const t = h.tg_last_ok, stale = !t || Date.now() / 1000 - t > 90;
+  $("#tg").textContent = !t ? "Telegram belum terhubung" : stale ? "Telegram putus sejak " + ago(t) : "Telegram terhubung";
+  $("#tg").style.color = stale ? "var(--del, #c0392b)" : "";
+  $("#tg").title = h.tg_last_error || (stale ? "MR Pilot tidak mengambil pesan Telegram. Cek komputernya menyala dan hanya satu MR Pilot yang jalan." : "");
 }
 
 /* ================================================================ detail drawer */
