@@ -276,3 +276,45 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok", name)
+
+
+def test_telegram_thread_defers_heavy_actions_but_answers_light_ones():
+    """While MR Pilot is busy reviewing, /status answers at once and a Merge tap is acknowledged, then runs
+    from the main loop (one thread per MR)."""
+    app, gl, tg = make_app()
+    app.poll_gitlab()
+    msg_id = tg.sent[0][0]
+    app._threaded = True
+    app._busy = "mereview !999"
+    n = len(tg.sent)
+    app.on_message({"from": {"id": 42}, "text": "/status"})
+    assert len(tg.sent) == n + 1 and "Menunggu keputusan" in tg.sent[-1][1], "perintah ringan langsung dibalas"
+    app.on_callback({"id": "c1", "from": {"id": 42}, "data": "m|7|375", "message": {"message_id": msg_id}})
+    assert not gl.merged, "merge tidak jalan di thread Telegram"
+    assert "sedang mereview" in tg.sent[-1][1], "pengguna diberi tahu bahwa perintah mengantre"
+    app._busy = ""
+    app._run_actions()
+    assert gl.merged and gl.approved
+
+
+def test_telegram_thread_receives_while_main_loop_is_busy():
+    import threading
+    import time
+    app, gl, tg = make_app()
+    got = threading.Event()
+    calls = {"n": 0}
+
+    def get_updates(offset, timeout):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return [{"update_id": 5, "message": {"from": {"id": 42}, "text": "/start"}}]
+        time.sleep(0.05)
+        return []
+    tg.get_updates = get_updates
+    orig = tg.send
+    tg.send = lambda *a, **k: (got.set(), orig(*a, **k))[1]
+    app._threaded = True
+    app._ensure_tg_thread()  # main loop never runs here (it would be busy): the thread alone must answer
+    assert got.wait(3), "bot harus membalas walau loop utama sibuk"
+    app.stop_requested = True
+    assert app.store.kv_get("tg_last_ok")

@@ -96,6 +96,14 @@ class App:
         self._tg_warned = 0.0
         self._tg_fail = 0
         self._tg_fail_logged = 0.0
+        # Telegram has its own thread while running (run_forever): commands and button taps are answered
+        # right away even during a long AI review. Heavy actions are queued to the main loop (_defer).
+        self.tg_poll = self.tg if tg else Telegram(t["bot_token"], t["chat_id"], proxy=t.get("proxy"),
+                                                   api_base=t.get("api_base"))
+        self._threaded = False
+        self._tg_thread = None
+        self._actions = queue.Queue()
+        self._busy = ""
         self.heartbeat_path = os.path.join(cfg.get("_base_dir", "."), ".heartbeat")
 
     # ------------------------------------------------------------- lifecycle
@@ -112,6 +120,48 @@ class App:
         self.stop_requested = True
         if not self._critical:
             raise Stop()
+
+    # ------------------------------------------------------- telegram thread
+    def _defer(self, fn, *a, **kw):
+        """Run now (tests, one-off commands) or, while the Telegram thread is active, queue it for the main
+        loop so only one thread touches an MR at a time."""
+        if not self._threaded:
+            return fn(*a, **kw)
+        if self._busy:
+            self.safe_send(f"⏳ MR Pilot sedang {e(self._busy)}. Perintah Anda dijalankan setelah selesai.")
+        self._actions.put((fn, a, kw))
+
+    def _run_actions(self, wait=0.0):
+        first = True
+        while True:
+            try:
+                fn, a, kw = self._actions.get(timeout=wait) if (first and wait) else self._actions.get_nowait()
+            except queue.Empty:
+                return
+            first = False
+            try:
+                fn(*a, **kw)
+            except Stop:
+                raise
+            except Exception as ex:
+                log.exception("Aksi Telegram gagal")
+                self.safe_send(f"⚠️ Error: {e(short_error(ex))}")
+
+    def _tg_loop(self):
+        while not self.stop_requested:
+            try:
+                self.poll_telegram(25)
+            except Exception as ex:  # never let the thread die
+                self._tg_failed(short_error(ex))
+                time.sleep(5)
+
+    def _ensure_tg_thread(self):
+        if self._tg_thread and self._tg_thread.is_alive():
+            return
+        if self._tg_thread:
+            log.warning("Thread Telegram berhenti, dijalankan ulang.")
+        self._tg_thread = threading.Thread(target=self._tg_loop, name="mrp-telegram", daemon=True)
+        self._tg_thread.start()
 
     def watch(self):
         w = self.cfg["gitlab"].get("watch") or ["reviewer", "assignee"]
@@ -215,8 +265,10 @@ class App:
         log.info("MR Pilot jalan untuk @%s (cek tiap %ss)", self.username, interval)
         if self.cfg["telegram"].get("startup_message"):
             self.safe_send(f"🟢 MR Pilot aktif, memantau MR untuk <b>@{e(self.username)}</b>.")
+        self._threaded = True
         while not self.stop_requested:
             self.heartbeat()
+            self._ensure_tg_thread()
             if time.time() - self.last_poll >= interval:
                 self.last_poll = time.time()
                 try:
@@ -254,7 +306,10 @@ class App:
                 except Exception:
                     log.exception("prune gagal")
             self._drain_bg()
-            self.poll_telegram(interval)
+            if self._threaded:
+                self._run_actions(wait=2.0)
+            else:
+                self.poll_telegram(interval)
 
     def poll_telegram(self, interval):
         if time.time() < self._tg_backoff_until:
@@ -274,6 +329,7 @@ class App:
                     self.event("error", "Bot Telegram dipakai instance lain",
                                "Matikan MR Pilot di PC atau di server; hanya satu yang boleh jalan.", level="error")
                 self._tg_backoff_until = time.time() + 30
+                self.store.kv_set("tg_last_error", f"{time.strftime('%H:%M')} bot dipakai instance lain (409)")
             else:
                 self._tg_failed(str(ex))
         except Exception as ex:
@@ -282,10 +338,13 @@ class App:
             if self._tg_fail:
                 log.info("Telegram tersambung lagi setelah %s kali gagal.", self._tg_fail)
                 self._tg_fail = 0
+            self.store.kv_set("tg_last_ok", time.time())
+            self.store.kv_del("tg_last_error")
 
     def _tg_failed(self, msg):
         """Network/API trouble: exponential backoff (5s..60s), log the first failure and then every 10 min."""
         self._tg_fail += 1
+        self.store.kv_set("tg_last_error", f"{time.strftime('%H:%M')} {msg}"[:200])
         if self._tg_fail == 1 or time.time() - self._tg_fail_logged > 600:
             self._tg_fail_logged = time.time()
             log.warning("Telegram: %s (dicoba ulang otomatis)", msg)
@@ -352,6 +411,8 @@ class App:
                     continue
                 if rec["status"] in ("error", "notify_failed") and (rec.get("attempts") or 0) >= 5:
                     continue
+            self._run_actions()  # Merge/Tolak taps that arrived meanwhile don't wait for the whole list
+            self._busy = f"mereview !{m['iid']}"
             try:
                 self.process(m["project_id"], m["iid"], rec)
             except Stop:
@@ -368,6 +429,8 @@ class App:
                     self.safe_send(f"⚠️ Gagal memproses {e(m.get('web_url'))}: {e(msg)}"
                                    + ("\n<i>Berhenti mencoba sampai ada commit baru.</i>" if attempts == 5 else ""))
                 self.event("error", f"Gagal memproses !{m['iid']}", msg, key, "error")
+            finally:
+                self._busy = ""
         self.sync_closed(seen)
         self.pipes.check_all()
 
@@ -538,7 +601,7 @@ class App:
     # -------------------------------------------------------------- Telegram
     def handle_updates(self, timeout=25):
         offset = int(self.store.kv_get("tg_offset", 0) or 0)
-        for u in self.tg.get_updates(offset, timeout):
+        for u in self.tg_poll.get_updates(offset, timeout):
             # at-most-once: never re-run a Merge tap after a crash
             self.store.kv_set("tg_offset", u["update_id"] + 1)
             try:
@@ -576,10 +639,11 @@ class App:
             return
         if action in ("m", "md"):
             self.tg.answer(cid, "Memproses merge…")
-            self.do_merge(rec, confirmed=False, delete_branch=self.want_delete(action))
+            self._defer(self.do_merge, rec, confirmed=False, delete_branch=self.want_delete(action))
         elif action in ("mf", "mfd"):
             self.tg.answer(cid, "Merge…")
-            self.do_merge(rec, confirmed=True, confirm_msg_id=msg_id, delete_branch=self.want_delete(action))
+            self._defer(self.do_merge, rec, confirmed=True, confirm_msg_id=msg_id,
+                        delete_branch=self.want_delete(action))
         elif action == "c":
             self.tg.answer(cid, "Dibatalkan")
             self.safe_edit(msg_id, "Merge dibatalkan.")
@@ -588,10 +652,11 @@ class App:
             self.ask_reject_reason(rec)
         elif action == "ps":
             self.tg.answer(cid, "Mengirim saran…")
-            self.send_suggestions(rec)
+            self._defer(self.send_suggestions, rec)
         elif action == "rr":
             self.tg.answer(cid, "Review ulang…")
-            self.process(pid, iid, rec, force_llm=self.reviewer.llm_available(), header="🔁 Review ulang")
+            self._defer(lambda: self.process(pid, iid, rec, force_llm=self.reviewer.llm_available(),
+                                             header="🔁 Review ulang"))
         else:
             self.tg.answer(cid, "Tombol tidak dikenal")
 
@@ -603,7 +668,7 @@ class App:
         if reply:
             key = self.store.kv_get(f"reject:{reply.get('message_id')}")
             if key:
-                self.finish_reject(self.store.get(key), text, reply.get("message_id"))
+                self._defer(self.finish_reject, self.store.get(key), text, reply.get("message_id"))
                 return
         cmd = text.split()[0].split("@")[0].lower() if text else ""
         if cmd in ("/start", "/help"):
@@ -632,13 +697,17 @@ class App:
         elif cmd in ("/delivery", "/laporan"):
             arg = text.split()[1].lower() if len(text.split()) > 1 else ""
             kind = {"lalu": "last_week", "bulan": "this_month", "bulanlalu": "last_month"}.get(arg, "this_week")
-            self.safe_send(self.delivery.text(self.delivery.build(kind), url=self._dash_url("/delivery")))
+            self._defer(lambda: self.safe_send(self.delivery.text(self.delivery.build(kind),
+                                                                  url=self._dash_url("/delivery"))))
         elif cmd == "/digest":
-            self.digest.send_digest()
+            self._defer(self.digest.send_digest)
         elif cmd == "/cek":
-            self.last_poll = time.time()
-            self.poll_gitlab()
-            self.safe_send("Selesai cek GitLab.")
+            self._defer(self._cek_now)
+
+    def _cek_now(self):
+        self.last_poll = time.time()
+        self.poll_gitlab()
+        self.safe_send("Selesai cek GitLab.")
 
     # ----------------------------------------------------------------- merge
     def pipeline_ok(self, mr):

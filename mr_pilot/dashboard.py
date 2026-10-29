@@ -105,6 +105,8 @@ class DashboardData:
             "health": {
                 "last_poll_ok": float(self.store.kv_get("last_poll_ok", 0) or 0),
                 "last_poll_error": self.store.kv_get("last_poll_error", ""),
+                "tg_last_ok": float(self.store.kv_get("tg_last_ok", 0) or 0),
+                "tg_last_error": self.store.kv_get("tg_last_error", ""),
                 "poll_interval": int(self.cfg["gitlab"]["poll_interval_seconds"]),
                 "review_mode": self.cfg["review"]["mode"],
                 "quality_enabled": bool(self.cfg["code_quality"]["enabled"]),

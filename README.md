@@ -389,6 +389,8 @@ Deploy di server menjalankan `deploy/remote-deploy.sh`: login registry (token di
 | Dashboard tidak bisa dibuka dari HP | `dashboard.host: 0.0.0.0`, isi password, dan izinkan port 8787 di Windows Firewall |
 
 | Log: "Bot Telegram yang sama sedang dipakai MR Pilot lain (409)" | MR Pilot jalan di dua tempat dengan bot yang sama (PC dan server). Matikan salah satu |
+| Bot diam, `/status` tidak dibalas | Cek dashboard: tulisan **Telegram terhubung** (hijau) atau **Telegram putus sejak ...** (merah). Merah = MR Pilot tidak berjalan (komputer sleep, Docker/WSL berhenti) atau ada instance kedua (409). Pesan yang tertunda dibalas sekaligus begitu MR Pilot hidup lagi (Telegram menyimpan sampai 24 jam) |
+| Tombol Merge terasa lambat saat ada review | Telegram punya thread sendiri: `/status` dibalas langsung dan tombol langsung dikonfirmasi. Aksi berat (merge, review ulang, `/cek`) mengantre dan jalan di antara review MR; bot memberi tahu "sedang mereview !N, dijalankan setelah selesai" |
 | Log: "Dashboard tidak bisa memakai port 8787" | Port dipakai aplikasi lain. Ganti `MRP_PORT` (Docker) / `DASHBOARD_PORT` |
 
 ### Menguji

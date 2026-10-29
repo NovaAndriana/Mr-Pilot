@@ -377,6 +377,7 @@ def test_09_conflict_and_merge_api_errors(w):
     w.gl.merge_behaviour.pop((7, 410))
     w.tg.press(mid, "m|7|410")
     wait(lambda: any(k == (7, 410) for k, _ in w.gl.merges), 15, "merge setelah retry")
+    cek(w)  # answered only after the merge and its follow-ups (Teams, order check) are done: test_10 starts clean
 
 
 def test_10_merge_connection_drop_but_merged(w):
