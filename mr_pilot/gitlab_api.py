@@ -66,6 +66,14 @@ class GitLab:
                     out.append(m)
         return out
 
+    def assigned_mrs(self, username, state="opened", updated_after=None, max_pages=10):
+        """MRs (any project the token can see) assigned to `username`, whoever the reviewer is."""
+        params = {"scope": "all", "state": state, "assignee_username": username,
+                  "order_by": "updated_at", "sort": "desc"}
+        if updated_after:
+            params["updated_after"] = updated_after
+        return self.get_all("/merge_requests", params, max_pages=max_pages)
+
     def project_mrs(self, pid, target_branch=None, state="opened", max_pages=3):
         params = {"state": state, "order_by": "updated_at", "sort": "desc"}
         if target_branch:

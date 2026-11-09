@@ -73,6 +73,7 @@ DEFAULTS = {
     "delivery": {
         "enabled": True,
         "group_by": "ai",            # ai | label | milestone | ticket
+        "source": "assignee",        # assignee = semua MR milik anggota tim (dari GitLab) | mrpilot = hanya yang masuk ke Anda
         "credit_by": "assignee",     # assignee = kredit ke Assignee MR | author = ke pembuat MR
         "label_prefix": "",          # group_by label: hanya label berawalan ini, mis. "feature::"
         "include_open": True,        # tampilkan juga MR yang masih berjalan
@@ -338,6 +339,9 @@ def validate(cfg):
     dl["group_by"] = str(dl.get("group_by") or "ai").strip().lower()
     if dl["group_by"] not in ("ai", "label", "milestone", "ticket"):
         raise ConfigError("delivery.group_by harus ai | label | milestone | ticket")
+    dl["source"] = str(dl.get("source") or "assignee").strip().lower()
+    if dl["source"] not in ("assignee", "mrpilot"):
+        raise ConfigError("delivery.source harus assignee | mrpilot")
     dl["credit_by"] = str(dl.get("credit_by") or "assignee").strip().lower()
     if dl["credit_by"] not in ("assignee", "author"):
         raise ConfigError("delivery.credit_by harus assignee | author")

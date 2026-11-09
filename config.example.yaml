@@ -83,10 +83,11 @@ daily:
 
 delivery:
   # Laporan pekerjaan tim untuk atasan: per tim (BE/FE/Mobile/QA) -> per orang -> per fitur -> MR-nya.
-  # Hanya MR yang masuk ke Anda (yang tercatat di MR Pilot). Lihat dashboard -> Delivery tim.
+  # Sumber: semua MR yang di-assign ke anggota `team`, dari GitLab, siapa pun reviewernya. Lihat dashboard -> Delivery tim.
   # Daftarkan username GitLab tiap anggota di `team` (atau di halamannya): MR dikreditkan ke Assignee-nya.
   enabled: true
   group_by: ai                    # ai = AI mengelompokkan (bisa diedit di dashboard) | label | milestone | ticket
+  source: assignee                # assignee = semua MR milik anggota tim (diambil dari GitLab, tanpa filter Reviewer) | mrpilot = hanya MR yang masuk ke Anda
   credit_by: assignee             # assignee = pekerjaan dihitung ke Assignee MR (username masing-masing) | author = ke pembuat MR
   label_prefix: ""                # untuk group_by label: hanya label berawalan ini, mis. "feature::"
   include_open: true              # tampilkan juga MR yang masih berjalan

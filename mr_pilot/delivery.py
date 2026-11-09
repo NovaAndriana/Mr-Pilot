@@ -123,6 +123,8 @@ class Delivery:
         self.store, self.ai, self.gl = store, ai, gl
         self.send = send or (lambda *a, **k: None)
         self._me = me or (lambda: None)
+        self._cache = {}
+        self.src_note = ""
 
     @property
     def enabled(self):
@@ -191,7 +193,82 @@ class Delivery:
         return v if v is not None else str(self.cfg.get("label_prefix") or "")
 
     # ------------------------------------------------------------ data
+    def source(self):
+        v = str(self.cfg.get("source") or "assignee").lower()
+        return v if v in ("assignee", "mrpilot") else "assignee"
+
     def rows(self, start, end):
+        """Report rows. By default (source: assignee) straight from GitLab: every MR assigned to a team
+        member, regardless of who the reviewer is. 'mrpilot' = only MRs MR Pilot has seen."""
+        self.src_note = ""
+        members = [m["username"] for m in self.team()]
+        if self.source() != "assignee" or not self.gl or not hasattr(self.gl, "assigned_mrs"):
+            return self._stored_rows(start, end)
+        if not members:
+            self.src_note = "Daftar anggota tim masih kosong: isi username GitLab tiap anggota di bagian bawah halaman."
+            return []
+        hit = self._cache.get((start, end))
+        if hit and time.time() - hit[0] < 120:
+            self.src_note = hit[2]
+            return [dict(r) for r in hit[1]]
+        found, failed = {}, []
+        since = datetime.fromtimestamp(start).strftime("%Y-%m-%dT%H:%M:%S")
+        include_open = self.cfg.get("include_open", True)
+        for u in members:
+            try:
+                merged = self.gl.assigned_mrs(u, "merged", updated_after=since)
+                opened = self.gl.assigned_mrs(u, "opened") if include_open else []
+            except Exception as ex:
+                log.warning("delivery: MR milik %s tidak terbaca: %s", u, short_error(ex))
+                failed.append(u)
+                continue
+            for mr in merged + opened:
+                r = self._row_from_gitlab(mr, start, end)
+                if r:
+                    found[r["key"]] = r
+        if failed and len(failed) == len(members):
+            self.src_note = "GitLab tidak terjangkau, menampilkan data yang tersimpan di MR Pilot."
+            return self._stored_rows(start, end)
+        if failed:
+            self.src_note = "MR milik " + ", ".join(failed) + " gagal dibaca dari GitLab (sebagian data belum lengkap)."
+        out = sorted(found.values(), key=lambda r: r["_ts"])
+        self._cache[(start, end)] = (time.time(), out, self.src_note)
+        return [dict(r) for r in out]
+
+    @staticmethod
+    def _row_from_gitlab(mr, start, end):
+        """A report row in the same shape as a stored MR, or None when the MR is outside the period."""
+        state = mr.get("state")
+        if state == "merged":
+            ts = _iso_ts(mr.get("merged_at")) or _iso_ts(mr.get("updated_at"))
+            if not ts or not (start <= ts < end):
+                return None
+            kind = "merged"
+        elif state == "opened":
+            created = _iso_ts(mr.get("created_at")) or 0
+            ts = _iso_ts(mr.get("updated_at")) or created
+            if not (created < end and ts >= start):
+                return None
+            kind = "open"
+        else:
+            return None
+        pid, iid = mr.get("project_id"), mr.get("iid")
+        author = mr.get("author") or {}
+        asg = mr.get("assignees") or ([mr["assignee"]] if mr.get("assignee") else [])
+        return {"key": f"{pid}:{iid}", "project_id": pid, "iid": iid, "title": mr.get("title") or "",
+                "web_url": mr.get("web_url"), "status": "merged" if kind == "merged" else "open",
+                "author": author.get("name"), "author_username": author.get("username"),
+                "source_branch": mr.get("source_branch"), "target_branch": mr.get("target_branch"),
+                "project": ((mr.get("references") or {}).get("full") or "").split("!")[0],
+                "mr_created_at": mr.get("created_at"), "merged_at": mr.get("merged_at"),
+                "labels": json.dumps(mr.get("labels") or [], ensure_ascii=False),
+                "milestone": (mr.get("milestone") or {}).get("title") or "",
+                "description": (mr.get("description") or "")[:2000],
+                "assignees": json.dumps([{"username": a.get("username"), "name": a.get("name")}
+                                         for a in asg if a.get("username")], ensure_ascii=False),
+                "_ts": ts, "_state": kind}
+
+    def _stored_rows(self, start, end):
         include_open = self.cfg.get("include_open", True)
         out = []
         for r in self.store.query("SELECT * FROM mrs"):
@@ -393,7 +470,7 @@ class Delivery:
         rows = self.rows(s, e)
         self.enrich(rows)
         mode = self.mode()
-        note = self.assign(rows, mode, regroup) if rows else ""
+        note = " ".join(x for x in (self.src_note, self.assign(rows, mode, regroup) if rows else "") if x)
         members = {m["username"].lower(): m for m in self.team()}
         order = [str(x) for x in (self.cfg.get("teams_order") or [])]
         credit = self.credit_by()

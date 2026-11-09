@@ -264,6 +264,75 @@ def test_mr_meta_keeps_assignees():
     assert json.loads(m["assignees"]) == [{"username": "sari", "name": "Sari"}]
 
 
+class AssignGL:
+    """GitLab stand-in: MRs per assignee username, regardless of who reviews them."""
+    def __init__(self, data, fail=()):
+        self.data, self.fail, self.calls = data, set(fail), []
+
+    def assigned_mrs(self, username, state="opened", updated_after=None, max_pages=10):
+        self.calls.append((username, state))
+        if username in self.fail:
+            raise ConnectionError("down")
+        return [m for m in self.data.get(username, []) if m["state"] == state]
+
+
+def gl_mr(iid, title, state, assignees, day=date(2026, 10, 27), author="rudi"):
+    d = datetime(day.year, day.month, day.day, 10).isoformat() + "Z"
+    return {"project_id": 7, "iid": iid, "title": title, "state": state, "web_url": f"https://gl/7/{iid}",
+            "author": {"username": author, "name": author.title()}, "created_at": d, "updated_at": d,
+            "merged_at": d if state == "merged" else None, "source_branch": "feat/x", "target_branch": "staging",
+            "references": {"full": f"idas/be!{iid}"}, "labels": [], "milestone": None, "description": "",
+            "assignees": [{"username": a, "name": a.title()} for a in assignees]}
+
+
+def test_source_assignee_reads_gitlab_without_reviewer_filter():
+    dl, store = make(mode="ticket")
+    dl._me = lambda: "nova"
+    data = {"joko": [gl_mr(1, "feat(IDAS-1): a", "merged", ["joko"]),
+                     gl_mr(2, "feat(IDAS-2): b", "merged", ["joko", "sari"], day=date(2026, 9, 1)),   # old: out
+                     gl_mr(3, "fix(IDAS-3): c", "opened", ["joko"])],
+            "sari": [gl_mr(4, "feat(IDAS-4): d", "merged", ["sari"], author="joko"),
+                     gl_mr(1, "feat(IDAS-1): a", "merged", ["joko", "sari"])]}  # same MR listed twice
+    data["sari"][1]["assignees"] = data["joko"][0]["assignees"] = [{"username": "joko", "name": "Joko"},
+                                                                   {"username": "sari", "name": "Sari"}]
+    dl.gl = AssignGL(data)
+    assert store.query("SELECT * FROM mrs") == [], "tidak ada data di MR Pilot: sumbernya GitLab"
+    rep = dl.build("this_week", today=TODAY)
+    assert rep["totals"]["mrs"] == 3, "MR ganda dihitung sekali, MR di luar periode tidak ikut"
+    assert _people(rep) == {"Mas Joko": 2, "Mbak Sari": 2}, _people(rep)
+    assert {u for u, _ in dl.gl.calls} == {"joko", "rudi", "sari"}, "tiap anggota tim ditanyakan"
+    n = len(dl.gl.calls)
+    dl.build("this_week", today=TODAY)
+    assert len(dl.gl.calls) == n, "cache singkat: tidak menanyakan GitLab lagi"
+
+
+def test_source_assignee_failures_and_empty_team():
+    dl, store = make(mode="ticket")
+    add(store, 8, "feat(IDAS-8): stored", "rudi", "Rudi H")
+    dl.gl = AssignGL({}, fail={"joko", "rudi", "sari"})
+    rep = dl.build("this_week", today=TODAY)
+    assert "tidak terjangkau" in rep["note"] and rep["totals"]["mrs"] == 1, "cadangan: data tersimpan"
+    dl2, _ = make(mode="ticket")
+    dl2.gl = AssignGL({"joko": [gl_mr(1, "feat(IDAS-1): a", "merged", ["joko"])]}, fail={"rudi"})
+    rep = dl2.build("this_week", today=TODAY)
+    assert "rudi" in rep["note"] and rep["totals"]["mrs"] == 1
+    dl3, _ = make(mode="ticket")
+    dl3.save_team([])
+    dl3.cfg["team"] = []
+    dl3.gl = AssignGL({})
+    rep = dl3.build("this_week", today=TODAY)
+    assert "kosong" in rep["note"] and rep["totals"]["mrs"] == 0
+
+
+def test_source_mrpilot_keeps_old_behaviour():
+    dl, store = make(mode="ticket")
+    dl.cfg["source"] = "mrpilot"
+    add(store, 1, "feat(IDAS-1): a", "joko", "Joko S")
+    dl.gl = AssignGL({"rudi": [gl_mr(2, "feat(IDAS-2): b", "merged", ["rudi"])]})
+    rep = dl.build("this_week", today=TODAY)
+    assert rep["totals"]["mrs"] == 1 and not dl.gl.calls
+
+
 def test_dashboard_routes():
     from tests.test_quality import _req, _serve
     cfg = copy.deepcopy(DEFAULTS)
