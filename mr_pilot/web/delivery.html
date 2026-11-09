@@ -103,6 +103,12 @@
         <option value="ticket">Nomor tiket</option>
       </select>
     </label>
+    <label class="ctrl" style="font-size:13px">Dihitung ke
+      <select id="f-credit">
+        <option value="assignee">Assignee MR</option>
+        <option value="author">Pembuat MR</option>
+      </select>
+    </label>
     <span class="ctrl" id="prefix-wrap" hidden><input type="text" id="f-prefix" placeholder="awalan label, mis. feature::" style="width:200px"><button class="btn ghost sm" id="save-prefix">Simpan</button></span>
     <span style="flex:1"></span>
     <button class="btn ghost sm" id="edit">Edit pengelompokan</button>
@@ -112,6 +118,7 @@
     <a class="btn sm" id="docx" href="#" style="text-decoration:none">Unduh Word</a>
   </div>
   <div class="msg" id="note" hidden></div>
+  <div class="msg" id="fallback" hidden></div>
 
   <div class="dl-tiles" id="tiles"></div>
 
@@ -161,7 +168,8 @@ const counts = p => KIND_OPTS.filter(([k]) => p.counts[k]).map(([k, l]) => `${p.
 function render() {
   const t = data.totals, P = data.period;
   $("#title").textContent = `Delivery tim · ${P.label}`;
-  $("#h-sub").textContent = `Pekerjaan setiap orang di tim, dikelompokkan per ${({ ai: "fitur (dikelompokkan AI)", label: "label GitLab", milestone: "milestone GitLab", ticket: "nomor tiket" })[data.mode]}. Sumber: MR yang masuk ke Anda.`;
+  $("#h-sub").textContent = `Pekerjaan setiap orang di tim, dikelompokkan per ${({ ai: "fitur (dikelompokkan AI)", label: "label GitLab", milestone: "milestone GitLab", ticket: "nomor tiket" })[data.mode]}. Dihitung ke ${data.credit.by === "assignee" ? "Assignee MR" : "pembuat MR"}. Sumber: MR yang masuk ke Anda.`;
+  $("#f-credit").value = data.credit.by;
   $("#f-mode").value = data.mode;
   $("#prefix-wrap").hidden = data.mode !== "label";
   $("#f-prefix").value = data.label_prefix || "";
@@ -216,6 +224,8 @@ function render() {
 }
 
 function renderMembers() {
+  $("#fallback").hidden = !data.credit.fallback;
+  $("#fallback").textContent = data.credit.fallback ? `${data.credit.fallback} MR tidak punya Assignee (atau hanya Anda), jadi dihitung ke pembuatnya: ${data.credit.fallback_mrs.join(", ")}${data.credit.fallback > data.credit.fallback_mrs.length ? ", …" : ""}. Isi Assignee di GitLab supaya masuk ke orang yang mengerjakan.` : "";
   $("#unreg").innerHTML = data.unregistered.length ? `<div class="note" style="margin-bottom:10px">Belum terdaftar: ${data.unregistered.map(u =>
     `<button class="linkbtn add-unreg" data-u="${esc(u.username)}" data-n="${esc(u.name)}" style="font-size:13px">+ ${esc(u.name)} (@${esc(u.username)})</button>`).join(" · ")}</div>` : "";
   $("#members").innerHTML = members.map((m, i) => `<tr data-i="${i}"><td><input type="text" value="${esc(m.username)}" data-f="username" placeholder="budi"></td>
@@ -240,6 +250,10 @@ $("#save-team").onclick = async () => {
 };
 $("#f-mode").onchange = async () => {
   try { await api("/api/delivery/mode", { method: "PUT", body: JSON.stringify({ mode: $("#f-mode").value }) }); toast("Cara pengelompokan diganti."); await load(); }
+  catch (ex) { toast("Gagal: " + ex.message); }
+};
+$("#f-credit").onchange = async () => {
+  try { await api("/api/delivery/mode", { method: "PUT", body: JSON.stringify({ credit_by: $("#f-credit").value }) }); toast("Cara menghitung diganti."); await load(); }
   catch (ex) { toast("Gagal: " + ex.message); }
 };
 $("#save-prefix").onclick = async () => {

@@ -38,6 +38,7 @@ def now_str():
 def mr_meta(mr):
     """MR fields kept for the dashboard."""
     author = mr.get("author") or {}
+    asg = mr.get("assignees") or ([mr["assignee"]] if mr.get("assignee") else [])
     hp = mr.get("head_pipeline") or mr.get("pipeline") or {}
     return dict(project=((mr.get("references") or {}).get("full") or "").split("!")[0],
                 author=author.get("name"), author_username=author.get("username"),
@@ -45,7 +46,9 @@ def mr_meta(mr):
                 pipeline=hp.get("status") or "none", mr_created_at=mr.get("created_at"),
                 labels=json.dumps(mr.get("labels") or [], ensure_ascii=False),
                 milestone=(mr.get("milestone") or {}).get("title") or "",
-                description=(mr.get("description") or "")[:2000])
+                description=(mr.get("description") or "")[:2000],
+                assignees=json.dumps([{"username": a.get("username"), "name": a.get("name")}
+                                      for a in asg if a.get("username")], ensure_ascii=False))
 
 
 class Stop(BaseException):
@@ -75,7 +78,7 @@ class App:
         from .merge_order import MergeOrder
         self.order = MergeOrder(cfg, self.gl, self.store)
         from .delivery import Delivery
-        self.delivery = Delivery(cfg, self.store, self.ai, self.gl, self.safe_send)
+        self.delivery = Delivery(cfg, self.store, self.ai, self.gl, self.safe_send, me=lambda: self.username)
         # Security + DORA read lots of GitLab data: they run on a background thread with their own HTTP
         # session, so a long first sync never delays a Merge tap. Their Telegram messages are queued and
         # sent from the main loop.

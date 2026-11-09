@@ -117,11 +117,12 @@ def _iso_ts(s):
 
 # ----------------------------------------------------------------- report
 class Delivery:
-    def __init__(self, cfg, store, ai=None, gl=None, send=None):
+    def __init__(self, cfg, store, ai=None, gl=None, send=None, me=None):
         self.root = cfg
         self.cfg = cfg.get("delivery") or {}
         self.store, self.ai, self.gl = store, ai, gl
         self.send = send or (lambda *a, **k: None)
+        self._me = me or (lambda: None)
 
     @property
     def enabled(self):
@@ -159,6 +160,32 @@ class Delivery:
         if label_prefix is not None:
             self.store.kv_set("delivery_label_prefix", str(label_prefix).strip())
 
+    def credit_by(self):
+        v = self.store.kv_get("delivery_credit_by") or self.cfg.get("credit_by") or "assignee"
+        return v if v in ("assignee", "author") else "assignee"
+
+    def set_credit_by(self, v):
+        if v not in ("assignee", "author"):
+            raise ValueError("credit_by harus assignee | author")
+        self.store.kv_set("delivery_credit_by", v)
+
+    def credited(self, r, credit=None):
+        """Who gets the credit for an MR: [(username, name)], and how it was decided ('assignee' | 'author').
+        By assignee: every assignee except the reviewer himself (who is only assigned to merge). An MR without
+        any other assignee falls back to its author, so nothing silently disappears from the report."""
+        credit = credit or self.credit_by()
+        author = [((r.get("author_username") or "").strip(), r.get("author") or "")]
+        if credit != "assignee":
+            return author, "author"
+        me = (self._me() or (self.root.get("gitlab") or {}).get("username") or "").lower()
+        try:
+            asg = json.loads(r.get("assignees") or "[]")
+        except ValueError:
+            asg = []
+        people = [(a["username"], a.get("name") or a["username"]) for a in asg
+                  if isinstance(a, dict) and a.get("username") and a["username"].lower() != me]
+        return (people, "assignee") if people else (author, "author")
+
     def label_prefix(self):
         v = self.store.kv_get("delivery_label_prefix")
         return v if v is not None else str(self.cfg.get("label_prefix") or "")
@@ -182,21 +209,25 @@ class Delivery:
                     out.append(r)
         return sorted(out, key=lambda r: r["_ts"])
 
-    def enrich(self, rows, limit=40):
+    def enrich(self, rows, limit=80):
         """Older records were saved before labels/description were kept: fill them from GitLab once."""
         if not self.gl:
             return 0
         n = 0
         for r in rows:
-            if r.get("labels") is not None or n >= limit:
+            if (r.get("labels") is not None and r.get("assignees") is not None) or n >= limit:
                 continue
             try:
                 mr = self.gl.get_mr(r["project_id"], r["iid"])
             except Exception as ex:
                 log.info("delivery: detail !%s tidak terbaca: %s", r.get("iid"), short_error(ex))
-                r["labels"] = "[]"
+                r["labels"] = r.get("labels") or "[]"
+                r["assignees"] = r.get("assignees") or "[]"
                 continue
+            asg = mr.get("assignees") or ([mr["assignee"]] if mr.get("assignee") else [])
             f = dict(labels=json.dumps(mr.get("labels") or [], ensure_ascii=False),
+                     assignees=json.dumps([{"username": a.get("username"), "name": a.get("name")}
+                                           for a in asg if a.get("username")], ensure_ascii=False),
                      milestone=(mr.get("milestone") or {}).get("title") or "",
                      description=(mr.get("description") or "")[:2000])
             if mr.get("merged_at"):
@@ -365,21 +396,28 @@ class Delivery:
         note = self.assign(rows, mode, regroup) if rows else ""
         members = {m["username"].lower(): m for m in self.team()}
         order = [str(x) for x in (self.cfg.get("teams_order") or [])]
-        teams, unknown = {}, {}
+        credit = self.credit_by()
+        teams, unknown, fallback = {}, {}, []
         for r in rows:
-            u = (r.get("author_username") or "").lower()
-            m = members.get(u)
-            if not m:
-                unknown[u or "?"] = r.get("author") or u or "?"
-            tname = (m or {}).get("team") or "Belum terdaftar"
-            pname = (m or {}).get("name") or r.get("author") or u or "?"
-            person = teams.setdefault(tname, {}).setdefault(pname, {"name": pname, "username": u, "groups": {},
-                                                                     "counts": {k: 0 for k in KINDS},
-                                                                     "merged": 0, "open": 0})
-            person["counts"][r["_kind"]] += 1
-            person["merged" if r["_state"] == "merged" else "open"] += 1
-            g = person["groups"].setdefault(r["_group"], {"name": r["_group"], "source": r["_group_src"], "mrs": []})
-            g["mrs"].append(self._mr_item(r))
+            who, via = self.credited(r, credit)
+            r["_who"] = who
+            if credit == "assignee" and via == "author":
+                fallback.append(f"!{r.get('iid')}")
+            for username, name in who:
+                u = username.lower()
+                m = members.get(u)
+                if not m:
+                    unknown[u or "?"] = name or u or "?"
+                tname = (m or {}).get("team") or "Belum terdaftar"
+                pname = (m or {}).get("name") or name or u or "?"
+                person = teams.setdefault(tname, {}).setdefault(pname, {"name": pname, "username": u, "groups": {},
+                                                                         "counts": {k: 0 for k in KINDS},
+                                                                         "merged": 0, "open": 0})
+                person["counts"][r["_kind"]] += 1
+                person["merged" if r["_state"] == "merged" else "open"] += 1
+                g = person["groups"].setdefault(r["_group"], {"name": r["_group"], "source": r["_group_src"],
+                                                              "mrs": []})
+                g["mrs"].append(self._mr_item(r))
 
         def team_rank(t):
             return (order.index(t) if t in order else len(order) + (100 if t == "Belum terdaftar" else 0), t)
@@ -397,10 +435,11 @@ class Delivery:
         for r in rows:
             f = features.setdefault(r["_group"], {"name": r["_group"], "people": [], "merged": 0, "open": 0,
                                                   "mrs": []})
-            m = members.get((r.get("author_username") or "").lower())
-            who = (m or {}).get("name") or r.get("author") or "?"
-            if who not in f["people"]:
-                f["people"].append(who)
+            for username, name in r.get("_who") or []:
+                m = members.get(username.lower())
+                who = (m or {}).get("name") or name or "?"
+                if who not in f["people"]:
+                    f["people"].append(who)
             f["merged" if r["_state"] == "merged" else "open"] += 1
             f["mrs"].append(self._mr_item(r))
         feats = sorted(features.values(), key=lambda f: (-(f["merged"] + f["open"]), f["name"]))
@@ -416,6 +455,7 @@ class Delivery:
                            "open": sum(1 for r in rows if r["_state"] == "open"),
                            **{k: sum(1 for r in rows if r["_kind"] == k) for k in KINDS},
                            "people": sum(len(t["people"]) for t in out_teams)},
+                "credit": {"by": credit, "fallback": len(fallback), "fallback_mrs": fallback[:8]},
                 "teams": out_teams, "features": feats,
                 "unregistered": [{"username": u, "name": n} for u, n in sorted(unknown.items())],
                 "team_members": self.team(), "kinds": KINDS}

@@ -196,6 +196,74 @@ def test_enrich_old_records():
     assert dl.gl.n == 1, "sekali saja"
 
 
+def _people(rep):
+    return {p["name"]: sum(len(g["mrs"]) for g in p["groups"]) for t in rep["teams"] for p in t["people"]}
+
+
+def test_credit_goes_to_assignee_not_author():
+    dl, store = make(mode="ticket")
+    me = [{"username": "nova", "name": "Nova"}]
+    dl._me = lambda: "nova"
+    # author is the developer's colleague; the assignee is who owns the work
+    add(store, 1, "feat(IDAS-1): a", "rudi", "Rudi H")
+    add(store, 2, "feat(IDAS-2): b", "rudi", "Rudi H")
+    add(store, 3, "feat(IDAS-3): c", "rudi", "Rudi H")
+    add(store, 4, "feat(IDAS-4): d", "joko", "Joko S")
+    store.upsert("7:1", assignees=json.dumps([{"username": "joko", "name": "Joko S"}]))
+    store.upsert("7:2", assignees=json.dumps([{"username": "joko", "name": "Joko S"},
+                                              {"username": "sari", "name": "Sari"}]))   # two assignees: both
+    store.upsert("7:3", assignees=json.dumps(me))        # only the reviewer himself: falls back to the author
+    store.upsert("7:4", assignees="[]")                  # nobody assigned: falls back to the author
+    rep = dl.build("this_week", today=TODAY)
+    assert _people(rep) == {"Mas Joko": 3, "Mbak Sari": 1, "Mas Rudi": 1}, _people(rep)
+    assert rep["totals"]["mrs"] == 4, "MR dihitung sekali di total walau assignee-nya dua"
+    assert rep["credit"]["by"] == "assignee" and rep["credit"]["fallback"] == 2
+    assert set(rep["credit"]["fallback_mrs"]) == {"!3", "!4"}
+    assert any(f["people"] == ["Mas Joko", "Mbak Sari"] for f in rep["features"])
+
+
+def test_credit_by_author_and_setting_persists():
+    dl, store = make(mode="ticket")
+    add(store, 1, "feat(IDAS-1): a", "rudi", "Rudi H")
+    store.upsert("7:1", assignees=json.dumps([{"username": "joko", "name": "Joko S"}]))
+    assert _people(dl.build("this_week", today=TODAY)) == {"Mas Joko": 1}
+    dl.set_credit_by("author")
+    rep = dl.build("this_week", today=TODAY)
+    assert _people(rep) == {"Mas Rudi": 1} and rep["credit"]["fallback"] == 0
+    try:
+        dl.set_credit_by("reviewer")
+        raise AssertionError("harus ditolak")
+    except ValueError:
+        pass
+
+
+def test_unregistered_assignee_is_listed_and_old_records_are_backfilled():
+    class GL:
+        n = 0
+
+        def get_mr(self, pid, iid):
+            self.n += 1
+            return {"labels": [], "assignees": [{"username": "budi", "name": "Budi Baru"}],
+                    "author": {"name": "Rudi H", "username": "rudi"}}
+    dl, store = make(mode="ticket")
+    store.upsert("7:9", project_id=7, iid=9, title="feat(IDAS-9): x", status="merged",
+                 decided_at=ts(date(2026, 10, 27)), author_username="rudi", author="Rudi H", labels="[]")
+    dl.gl = GL()  # labels already known, assignees not: still fetched once
+    rep = dl.build("this_week", today=TODAY)
+    assert dl.gl.n == 1 and _people(rep) == {"Budi Baru": 1}
+    assert rep["unregistered"] == [{"username": "budi", "name": "Budi Baru"}]
+    dl.build("this_week", today=TODAY)
+    assert dl.gl.n == 1, "sekali saja"
+
+
+def test_mr_meta_keeps_assignees():
+    from mr_pilot.app import mr_meta
+    m = mr_meta({"assignees": [{"username": "joko", "name": "Joko S", "id": 1}], "author": {"username": "rudi"}})
+    assert json.loads(m["assignees"]) == [{"username": "joko", "name": "Joko S"}]
+    m = mr_meta({"assignee": {"username": "sari", "name": "Sari"}})
+    assert json.loads(m["assignees"]) == [{"username": "sari", "name": "Sari"}]
+
+
 def test_dashboard_routes():
     from tests.test_quality import _req, _serve
     cfg = copy.deepcopy(DEFAULTS)
