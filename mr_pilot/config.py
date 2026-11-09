@@ -252,12 +252,36 @@ def load_dotenv(path):
             os.environ[k] = v
 
 
+_TRACKER_ENV = (
+    (("jira", "url"), "JIRA_URL"),
+    (("jira", "email"), "JIRA_EMAIL"),
+    (("jira", "token"), "JIRA_TOKEN"),
+    (("plane", "url"), "PLANE_URL"),
+    (("plane", "workspace"), "PLANE_WORKSPACE"),
+    (("plane", "api_key"), "PLANE_API_KEY"),
+)
+
+
+def _tracker_env(cfg, raw):
+    """config.yaml lama (dibuat sebelum ada blok tracker) tidak meneruskan .env ke tracker.
+    Isi nilai yang masih kosong dari environment; nilai yang ditulis di config.yaml tetap menang."""
+    tk = cfg["tracker"]
+    prov = (os.environ.get("TRACKER_PROVIDER") or "").strip().lower()
+    if prov and not (raw.get("tracker") or {}).get("provider"):
+        tk["provider"] = prov
+    for (group, key), name in _TRACKER_ENV:
+        val = (os.environ.get(name) or "").strip()
+        if val and not tk[group].get(key):
+            tk[group][key] = val
+
+
 def load_config(path="config.yaml"):
     base_dir = os.path.dirname(os.path.abspath(path))
     load_dotenv(os.path.join(base_dir, ".env"))
     with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
     cfg = _merge(DEFAULTS, _expand(raw))
+    _tracker_env(cfg, raw)
 
     # paths relative to config folder
     for k in ("db_path", "log_file"):

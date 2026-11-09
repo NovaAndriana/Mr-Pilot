@@ -253,3 +253,23 @@ def test_config_validation():
     c["tracker"]["provider"] = "trello"
     with pytest.raises(ConfigError):
         validate(c)
+
+
+def test_old_config_without_tracker_block_reads_env(tmp_path, monkeypatch):
+    """config.yaml lama tanpa blok tracker: PLANE_* dari environment/.env tetap terbaca."""
+    from mr_pilot.config import load_config
+    for k in ("TRACKER_PROVIDER", "PLANE_URL", "PLANE_WORKSPACE", "PLANE_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    (tmp_path / ".env").write_text("TRACKER_PROVIDER=plane\nPLANE_URL=https://p.example\n"
+                                   "PLANE_WORKSPACE=ws\nPLANE_API_KEY=k\n")
+    (tmp_path / "config.yaml").write_text("gitlab:\n  url: https://g.example\n  token: x\n")
+    cfg = load_config(str(tmp_path / "config.yaml"))
+    assert cfg["tracker"]["provider"] == "plane"
+    assert cfg["tracker"]["plane"]["url"] == "https://p.example"
+    assert cfg["tracker"]["plane"]["workspace"] == "ws"
+    assert cfg["tracker"]["plane"]["api_key"] == "k"
+    # nilai eksplisit di config.yaml menang
+    (tmp_path / "config.yaml").write_text("gitlab:\n  url: https://g.example\n  token: x\n"
+                                          "tracker:\n  provider: jira\n  plane:\n    url: https://own\n")
+    cfg = load_config(str(tmp_path / "config.yaml"))
+    assert cfg["tracker"]["provider"] == "jira" and cfg["tracker"]["plane"]["url"] == "https://own"
