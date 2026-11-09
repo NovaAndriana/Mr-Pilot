@@ -83,6 +83,14 @@ DEFAULTS = {
         "team": [],                  # [{username, name, team}]; bisa juga diisi dari dashboard → Delivery tim
         "teams_order": ["BE", "FE", "Mobile", "QA"],
     },
+    "tracker": {
+        "provider": "jira",          # jira | plane | none; bisa diganti dari halaman Daily task
+        "lookback_days": 7,          # task yang sudah selesai ikut ditarik sejauh ini
+        "cache_minutes": 5,
+        "jira": {"url": "", "flavor": "auto", "auth": "auto", "email": "", "token": "", "projects": [],
+                 "jql": "", "verify_ssl": True},
+        "plane": {"url": "", "web_url": "", "workspace": "", "api_key": "", "projects": [], "verify_ssl": True},
+    },
     "security": {"enabled": True, "projects": [], "branch": "", "interval_minutes": 30, "mr_check": True,
                  "alert_min_severity": "high", "auto_project_days": 120},
     "dora": {"enabled": True, "projects": [], "source": "auto", "environment": "auto", "production_branch": "",
@@ -335,6 +343,23 @@ def validate(cfg):
             re.compile(cfg["dora"]["fix_pattern"])
         except re.error as ex:
             raise ConfigError(f"dora.fix_pattern bukan regex yang valid: {ex}") from None
+    tk = cfg["tracker"]
+    tk["provider"] = str(tk.get("provider") or "jira").strip().lower()
+    if tk["provider"] not in ("jira", "plane", "none"):
+        raise ConfigError("tracker.provider harus jira | plane | none")
+    for sec in ("jira", "plane"):
+        node = tk.setdefault(sec, {})
+        for k in ("projects",):
+            v = node.get(k) or []
+            if isinstance(v, str):
+                v = [x.strip() for x in v.split(",") if x.strip()]
+            node[k] = v
+        if isinstance(node.get("verify_ssl"), str):
+            node["verify_ssl"] = node["verify_ssl"].strip().lower() in ("true", "1", "yes", "on")
+    if str(tk["jira"].get("flavor") or "auto").lower() not in ("auto", "server", "cloud"):
+        raise ConfigError("tracker.jira.flavor harus auto | server | cloud")
+    if str(tk["jira"].get("auth") or "auto").lower() not in ("auto", "bearer", "basic"):
+        raise ConfigError("tracker.jira.auth harus auto | bearer | basic")
     dl = cfg["delivery"]
     dl["group_by"] = str(dl.get("group_by") or "ai").strip().lower()
     if dl["group_by"] not in ("ai", "label", "milestone", "ticket"):

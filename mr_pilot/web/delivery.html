@@ -133,7 +133,7 @@
     <div class="panel-h"><h2>Anggota tim</h2><span class="muted" style="font-size:13px">Username GitLab → nama di laporan → tim</span></div>
     <div class="panel-b">
       <div id="unreg"></div>
-      <div class="tscroll"><table><thead><tr><th>Username GitLab</th><th>Nama di laporan</th><th>Tim</th><th></th></tr></thead><tbody id="members"></tbody></table></div>
+      <div class="tscroll"><table><thead><tr><th>Username GitLab</th><th>Nama di laporan</th><th>Tim</th><th title="Hanya kalau berbeda dari username GitLab: login / email / nama di Jira atau Plane (boleh beberapa, pisahkan koma)">Di Jira/Plane</th><th></th></tr></thead><tbody id="members"></tbody></table></div>
       <div class="row" style="margin-top:10px;display:flex;gap:8px">
         <button class="btn ghost sm" id="add-member">Tambah orang</button>
         <button class="btn sm" id="save-team">Simpan anggota</button>
@@ -231,7 +231,8 @@ function renderMembers() {
   $("#members").innerHTML = members.map((m, i) => `<tr data-i="${i}"><td><input type="text" value="${esc(m.username)}" data-f="username" placeholder="budi"></td>
     <td><input type="text" value="${esc(m.name)}" data-f="name" placeholder="Mas Budi"></td>
     <td><input type="text" value="${esc(m.team)}" data-f="team" list="team-names" placeholder="BE"></td>
-    <td><button class="linkbtn del-member">Hapus</button></td></tr>`).join("") || `<tr><td colspan="4" class="muted">Belum ada anggota. Tambahkan supaya MR masuk ke tim yang benar.</td></tr>`;
+    <td><input type="text" value="${esc(m.tracker || "")}" data-f="tracker" placeholder="opsional"></td>
+    <td><button class="linkbtn del-member">Hapus</button></td></tr>`).join("") || `<tr><td colspan="5" class="muted">Belum ada anggota. Tambahkan supaya MR masuk ke tim yang benar.</td></tr>`;
   $("#members").querySelectorAll("input").forEach(inp => inp.oninput = () => {
     members[+inp.closest("tr").dataset.i][inp.dataset.f] = inp.value; $("#members").dataset.dirty = "1";
   });

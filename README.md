@@ -430,3 +430,16 @@ Dashboard → **Daily task** untuk review pekerjaan tim setiap pagi, dengan form
 - **Perlu ditanyakan** (dicek otomatis): status bertentangan dengan progress, next action hasil salin dari task lain, link mengarah ke tiket lain, tanggal "besok" yang sudah lewat, progress tidak berubah 3 hari, blocker yang sama 3 hari (perlu eskalasi), status Code Review tanpa MR, MR sudah merged tapi status masih In Progress, pipeline MR gagal. Bukti GitLab diambil dari MR yang masuk ke Anda.
 - **Daftar status** bisa ditambah atau dihapus di halaman (`daily.statuses`).
 - **Salin untuk Teams**: semua tim atau satu tim, format sama dengan yang biasa Anda kirim, sudah dirapikan.
+
+## Tracker task: Jira atau Plane
+
+MR Pilot bisa membaca task tim dari **Jira** atau **Plane** (hanya dibaca, tidak mengubah apa pun di sana). Satu pengaturan memilih yang aktif, jadi pindah dari Jira ke Plane cukup mengganti satu nilai.
+
+- **Memilih tracker:** `tracker.provider: jira | plane | none` di `config.yaml` (atau `TRACKER_PROVIDER` di `.env`). Di halaman **Daily task** ada pilihan yang sama di toolbar; pilihan di halaman menang dan langsung berlaku tanpa restart.
+- **Pengaturan Plane:** `tracker.plane.url` (alamat API; cloud `https://api.plane.so`), `workspace` (slug dari URL Plane), `api_key` (Profile Settings → Personal Access Tokens), dan opsional `projects` (id / identifier / nama; kosong = semua). Isi lewat `.env`: `PLANE_URL`, `PLANE_WORKSPACE`, `PLANE_API_KEY`.
+- **Pengaturan Jira:** `tracker.jira.url`, `token`, opsional `email` (Jira Cloud memakai email + API token; Server/DC memakai Personal Access Token), `projects`, dan `jql` kalau ingin menggantikan JQL bawaan. `flavor` dan `auth` otomatis terdeteksi. `.env`: `JIRA_URL`, `JIRA_EMAIL`, `JIRA_TOKEN`.
+- **Tes koneksi:** tombol *Tes koneksi* di halaman Daily task memeriksa alamat dan kunci, dengan pesan yang jelas kalau gagal (kunci ditolak, alamat salah, rate limit).
+- **Tarik task:** tombol *Tarik dari Plane/Jira* membuat task Daily untuk setiap task milik anggota tim, per PIC, dengan status dari tracker dan progress "Belum ada update" yang tinggal Anda tanyakan. Task yang sudah ada di Daily tidak diubah dan tidak digandakan. Task yang dibatalkan dan yang sudah lama selesai dilewati.
+- **Siapa pemilik task:** dicocokkan dari daftar anggota tim (halaman Delivery tim): username GitLab, bagian depan email, atau nama (tanpa "Mas/Mbak"). Kalau nama di Jira/Plane berbeda, isi kolom **Di Jira/Plane** pada anggota itu (login, email, atau nama; boleh beberapa dipisah koma).
+- **Pengecekan tambahan di Daily:** "Di Plane sudah Done, di Daily masih In Progress", "Di Daily sudah Done, di Plane masih In Progress", dan "Assignee di Plane berbeda dengan PIC di Daily".
+- **Batas:** Plane membatasi 60 request/menit per API key, jadi hasil disimpan `cache_minutes` (default 5 menit). Task yang sudah selesai ikut ditarik sejauh `lookback_days` (default 7).
