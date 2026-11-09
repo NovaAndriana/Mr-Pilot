@@ -168,7 +168,7 @@ const counts = p => KIND_OPTS.filter(([k]) => p.counts[k]).map(([k, l]) => `${p.
 function render() {
   const t = data.totals, P = data.period;
   $("#title").textContent = `Delivery tim · ${P.label}`;
-  $("#h-sub").textContent = `Pekerjaan setiap orang di tim, dikelompokkan per ${({ ai: "fitur (dikelompokkan AI)", label: "label GitLab", milestone: "milestone GitLab", ticket: "nomor tiket" })[data.mode]}. Dihitung ke ${data.credit.by === "assignee" ? "Assignee MR" : "pembuat MR"}. Sumber: MR yang masuk ke Anda.`;
+  $("#h-sub").textContent = `Pekerjaan setiap orang di tim, dikelompokkan per ${({ ai: "fitur (dikelompokkan AI)", label: "label GitLab", milestone: "milestone GitLab", ticket: "nomor tiket" })[data.mode]}. Dihitung ke ${data.credit.by === "assignee" ? "Assignee MR" : "pembuat MR"}. Sumber: MR yang di-assign ke anggota tim.`;
   $("#f-credit").value = data.credit.by;
   $("#f-mode").value = data.mode;
   $("#prefix-wrap").hidden = data.mode !== "label";
