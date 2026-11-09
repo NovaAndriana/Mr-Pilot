@@ -147,8 +147,12 @@ class Delivery:
             if not u or u.lower() in seen:
                 continue
             seen.add(u.lower())
-            clean.append({"username": u, "name": str(m.get("name") or u).strip()[:80],
-                          "team": str(m.get("team") or "").strip()[:30] or "Lainnya"})
+            item = {"username": u, "name": str(m.get("name") or u).strip()[:80],
+                    "team": str(m.get("team") or "").strip()[:30] or "Lainnya"}
+            tr = str(m.get("tracker") or "").strip()[:120]
+            if tr:
+                item["tracker"] = tr   # login / email / nama di Jira atau Plane kalau berbeda dari username GitLab
+            clean.append(item)
         self.store.kv_set("delivery_team", json.dumps(clean, ensure_ascii=False))
         return clean
 

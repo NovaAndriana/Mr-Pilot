@@ -99,6 +99,29 @@ delivery:
   #  - {username: sari, name: Mbak Sari, team: FE}
   teams_order: [BE, FE, Mobile, QA]
 
+tracker:
+  # Task tim dari Jira atau Plane (hanya dibaca, MR Pilot tidak mengubah apa pun di sana).
+  # Ganti provider kapan saja: di sini, atau dari halaman Daily task (pilihan di halaman menang).
+  provider: ${TRACKER_PROVIDER:-jira}    # jira | plane | none
+  lookback_days: 7                # task yang sudah selesai ikut ditarik sejauh ini
+  cache_minutes: 5                # hasil disimpan sebentar (Plane membatasi 60 request/menit)
+  jira:
+    url: ${JIRA_URL:-}            # mis. https://jira.perusahaan.id (Server/DC) atau https://x.atlassian.net (Cloud)
+    flavor: auto                  # auto | server | cloud
+    auth: auto                    # auto | bearer (Personal Access Token Server/DC) | basic (Cloud: email + API token)
+    email: ${JIRA_EMAIL:-}        # hanya untuk basic
+    token: ${JIRA_TOKEN:-}
+    projects: []                  # kunci project, mis. [IDAS]; kosong = semua yang bisa dilihat token
+    jql: ""                       # opsional, menggantikan JQL bawaan
+    verify_ssl: true
+  plane:
+    url: ${PLANE_URL:-}           # alamat API; Plane cloud: https://api.plane.so, self-hosted: alamat Plane Anda
+    web_url: ""                   # alamat web untuk link task; kosong = sama dengan url
+    workspace: ${PLANE_WORKSPACE:-}   # slug workspace (bagian dari URL Plane)
+    api_key: ${PLANE_API_KEY:-}   # Profile Settings -> Personal Access Tokens
+    projects: []                  # id / identifier / nama project; kosong = semua project
+    verify_ssl: true
+
 merge_order:
   # Bandingkan MR dengan MR lain yang terbuka ke branch tujuan yang sama: branch bertumpuk, fungsi baru yang
   # dipakai MR lain, fungsi yang dihapus/diubah padahal dipakai MR lain, nomor migrasi, versi dependency,

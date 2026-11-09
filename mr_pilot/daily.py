@@ -313,7 +313,7 @@ def ai_polish(ai, parsed):
 
 
 # ------------------------------------------------------------------ checks
-def check_entry(task, e, day, prev=None, history=(), mrs=(), dup_with=()):
+def check_entry(task, e, day, prev=None, history=(), mrs=(), dup_with=(), tk=None):
     """Warnings for one task on one day. history = older entries newest first (same task)."""
     w = []
     st = (e.get("status") or "").lower()
@@ -365,6 +365,22 @@ def check_entry(task, e, day, prev=None, history=(), mrs=(), dup_with=()):
                       "msg": f"Blocker yang sama sudah {days} hari{who}. Perlu dieskalasi?"})
     if st and st not in {s.lower() for s in e.get("_statuses", [])} and e.get("_statuses"):
         w.append({"code": "unknown-status", "level": "info", "msg": f"Status '{e.get('status')}' belum ada di daftar."})
+    # what Jira / Plane says about the same ticket
+    if tk:
+        prov = {"jira": "Jira", "plane": "Plane"}.get(tk.get("provider"), "Tracker")
+        grp, tstate = tk.get("group"), tk.get("state") or ""
+        if grp in ("done", "cancelled") and st not in FINAL:
+            w.append({"code": "tracker-done", "level": "warn",
+                      "msg": f"Di {prov} sudah {tstate}, di Daily masih {e.get('status') or 'kosong'}."})
+        elif st in FINAL and grp in ("todo", "doing"):
+            w.append({"code": "tracker-behind", "level": "warn",
+                      "msg": f"Di Daily sudah {e.get('status')}, di {prov} masih {tstate}."})
+        people = [p for p in (tk.get("people") or []) if p]
+        pic = _norm(task.get("pic"))
+        if people and pic and not any(_norm(p) in pic or pic in _norm(p) or
+                                      set(_norm(p).split()) & set(pic.split()) for p in people):
+            w.append({"code": "tracker-assignee", "level": "info",
+                      "msg": f"Assignee di {prov}: {', '.join(people)}; PIC di Daily: {task.get('pic')}."})
     # GitLab evidence (MRs that came to the lead)
     open_mrs = [m for m in mrs if m["state"] == "open"]
     merged = [m for m in mrs if m["state"] == "merged"]
@@ -387,9 +403,71 @@ def _norm(s):
 
 # ------------------------------------------------------------------ service
 class Daily:
-    def __init__(self, cfg, store, ai=None):
+    def __init__(self, cfg, store, ai=None, tracker=None, team=None):
         self.cfg = cfg.get("daily") or {}
         self.store, self.ai = store, ai
+        self.tracker = tracker      # tracker.Tracker (Jira / Plane) or None
+        self.team = team or (lambda: [])   # delivery team members [{username, name, team, tracker}]
+
+    def tracker_status(self):
+        return self.tracker.status() if self.tracker else {"provider": "none", "label": "Tidak dipakai",
+                                                          "providers": [], "enabled": False}
+
+    def _tk(self, tickets):
+        out = {}
+        for t in tickets:
+            try:
+                v = json.loads(self.store.kv_get(f"tk:{t}") or "null")
+            except ValueError:
+                v = None
+            if v:
+                out[t] = v
+        return out
+
+    def pull_tracker(self, day=None, force=False):
+        """Create Daily tasks for the team's Jira/Plane items that are not in Daily yet (one per PIC), and keep
+        each ticket's tracker state so the page can compare it with what the PIC reports."""
+        if not self.tracker:
+            raise ValueError("tracker belum diatur")
+        st = self.tracker.status()
+        if not st["enabled"]:
+            raise ValueError(f"{st['label']} belum aktif: lengkapi pengaturannya di config / .env, atau pilih tracker lain.")
+        day = day or date.today().isoformat()
+        members = [m for m in self.team() if m.get("username")]
+        if not members:
+            raise ValueError("daftar anggota tim masih kosong: isi di halaman Delivery tim (username + tim).")
+        statuses = self.statuses()
+        by_low = {s.lower(): s for s in statuses}
+        group_status = {"todo": "Open", "doing": "In Progress", "review": "Code Review", "qa": "Ready for QA",
+                        "done": "Done"}
+        recent = time.time() - 2 * 86400
+        res = {"provider": st["label"], "created": 0, "existing": 0, "skipped": 0, "unmatched": 0, "people": {}}
+        matched = self.tracker.team_items(members, force)
+        res["unmatched"] = len(self.tracker.items()) - len(matched)
+        for it, who in matched:
+            key = (it.get("key") or "").upper()
+            if not _KEY.fullmatch(key) or it["group"] == "cancelled":
+                res["skipped"] += 1
+                continue
+            self.store.kv_set(f"tk:{key}", self.tracker.snapshot(it))
+            if it["group"] == "done" and (it.get("updated") or 0) < recent:
+                res["skipped"] += 1
+                continue
+            if self._find({"ticket": key}):
+                res["existing"] += 1
+                continue
+            m = who[0]
+            tid = self.save_task({"ticket": key, "title": it.get("title"), "link": it.get("url"),
+                                  "team": m.get("team") or "Lainnya", "grp": it.get("project") or "",
+                                  "pic": m.get("name") or m.get("username")})
+            status = by_low.get((it.get("state") or "").lower()) or by_low.get(
+                group_status.get(it["group"], "").lower()) or it.get("state") or ""
+            if not self.store.query("SELECT 1 FROM daily_entries WHERE task_id=? AND day=?", (tid, day)):
+                self.save_entry(tid, day, {"status": status, "progress": "Belum ada update.", "next_action": "-",
+                                           "blocker": "-"})
+            res["created"] += 1
+            res["people"][m.get("name") or m["username"]] = res["people"].get(m.get("name") or m["username"], 0) + 1
+        return res
 
     # settings
     def statuses(self):
@@ -631,6 +709,7 @@ class Daily:
         for h in hist_rows:
             hist.setdefault(h["task_id"], []).append(h)
         mrs = self._mrs_by_ticket({r["ticket"] for r in rows if r.get("ticket")})
+        tks = self._tk({r["ticket"] for r in rows if r.get("ticket")})
         nexts = {}
         for r in rows:
             n = _norm(r.get("next_action"))
@@ -647,7 +726,8 @@ class Daily:
             dup = [x for x in nexts.get(_norm(r.get("next_action")), []) if x != me]
             e = {**r, "_statuses": statuses}
             r["mrs"] = mrs.get(r.get("ticket"), [])
-            r["warnings"] = check_entry(r, e, d, history=hist.get(r["id"], []), mrs=r["mrs"], dup_with=dup)
+            r["warnings"] = check_entry(r, e, d, history=hist.get(r["id"], []), mrs=r["mrs"], dup_with=dup,
+                                        tk=tks.get(r.get("ticket")))
             prev = (hist.get(r["id"]) or [None])[0]
             r["changed"] = None if not prev else any(
                 (prev.get(k) or "") != (r.get(k) or "") for k in ("progress", "status", "next_action", "blocker"))
@@ -665,6 +745,7 @@ class Daily:
         done = sum(1 for t in tasks if (t.get("status") or "").lower() in FINAL)
         return {"day": day, "day_label": date_id(d), "prev_day": prev_day, "next_day": next_day,
                 "statuses": statuses, "teams": teams, "groups_meta": self.groups_meta(),
+                "tracker": self.tracker_status(),
                 "link_base": self.link_base(),
                 "summary": {"tasks": sum(1 for t in tasks if not t.get("_header_only")), "warnings": warn_count,
                             "blockers": len(blockers), "done": done,

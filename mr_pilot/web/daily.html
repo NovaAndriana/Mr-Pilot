@@ -109,6 +109,9 @@
     <span style="flex:1"></span>
     <button class="btn ghost sm" id="carry" hidden></button>
     <label class="ctrl-ai" title="Selain koreksi bawaan (status, salah ketik umum), ejaan juga dirapikan AI saat menyimpan"><input type="checkbox" id="ai-fix"> Auto-correct AI</label>
+    <select id="trk" aria-label="Tracker task" title="Sumber task tim (Jira atau Plane)"><option value="jira">Jira</option><option value="plane">Plane</option><option value="none">Tanpa tracker</option></select>
+    <button class="btn ghost sm" id="trk-test" title="Cek koneksi dan API key">Tes koneksi</button>
+    <button class="btn ghost sm" id="pull"></button>
     <button class="btn ghost sm" id="open-paste">Tempel teks Teams</button>
     <button class="btn ghost sm" id="open-add">Tambah task</button>
     <select id="copy-team" aria-label="Tim yang disalin"><option value="">Semua tim</option></select>
@@ -187,6 +190,10 @@ function render() {
   const s = data.summary;
   $("#carry").hidden = !data.prev_day || s.tasks > 0;
   $("#carry").textContent = data.prev_day ? `Lanjutkan dari ${data.prev_day}` : "";
+  const tk = data.tracker || { provider: "none", label: "" };
+  $("#trk").value = tk.provider;
+  $("#pull").hidden = $("#trk-test").hidden = tk.provider === "none";
+  $("#pull").textContent = `Tarik dari ${tk.label}`;
   $("#tiles").innerHTML = [["Task", s.tasks, "dicek hari ini"], ["Perlu dicek", s.warnings, "isi yang janggal"], ["Blocker", s.blockers, "masih tertahan"],
     ["Belum berubah", s.unchanged, "sama dengan kemarin"], ["Done", s.done, "selesai"]]
     .map(([l, n, x]) => `<div class="tile"><div class="l">${esc(l)}</div><div class="n">${fmt(n)}</div><div class="s">${esc(x)}</div></div>`).join("");
@@ -421,6 +428,25 @@ $("#save-add").onclick = async () => {
   } catch (ex) { $("#add-msg").className = "msg bad"; $("#add-msg").textContent = ex.message; }
 };
 
+$("#trk").onchange = async () => {
+  try { await api("/api/tracker", { method: "PUT", body: JSON.stringify({ provider: $("#trk").value }) }); toast("Tracker diganti."); await load(); }
+  catch (ex) { toast("Gagal: " + ex.message); await load(); }
+};
+$("#trk-test").onclick = async () => {
+  $("#trk-test").disabled = true;
+  try { const r = await api("/api/tracker/test", { method: "POST", body: "{}" }); toast(r.message); }
+  catch (ex) { toast("Gagal: " + ex.message); }
+  $("#trk-test").disabled = false;
+};
+$("#pull").onclick = async () => {
+  $("#pull").disabled = true; toast("Menarik task dari tracker…");
+  try {
+    data = await api("/api/daily/pull", { method: "POST", body: JSON.stringify({ day }) }); render();
+    const r = data.pulled, who = Object.entries(r.people).map(([n, c]) => `${n} ${c}`).join(", ");
+    toast(`${r.provider}: ${r.created} task baru${who ? " (" + who + ")" : ""}, ${r.existing} sudah ada.` + (r.created === 0 && r.unmatched ? ` ${r.unmatched} task bukan milik anggota tim yang terdaftar.` : ""));
+  } catch (ex) { toast("Gagal: " + ex.message); }
+  $("#pull").disabled = false;
+};
 $("#carry").onclick = async () => {
   try { data = await api("/api/daily/carry", { method: "POST", body: JSON.stringify({ day }) }); render(); toast(`${data.carried} task dibawa dari ${data.prev_day}.`); }
   catch (ex) { toast("Gagal: " + ex.message); }

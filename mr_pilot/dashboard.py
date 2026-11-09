@@ -321,6 +321,7 @@ class Dashboard:
         self.store = store
         self._delivery = None
         self._daily = None
+        self._tracker = None
         self.httpd = None
         self.failed = {}            # ip -> [timestamps of failed logins]
         self.fail_lock = threading.Lock()
@@ -342,8 +343,18 @@ class Dashboard:
     def daily(self):
         if self._daily is None:
             from .daily import Daily
-            self._daily = Daily(self.cfg, self.store, self.ai)
+            self._daily = Daily(self.cfg, self.store, self.ai, self.tracker, self.app_delivery_team)
         return self._daily
+
+    @property
+    def tracker(self):
+        if getattr(self, "_tracker", None) is None:
+            from .tracker import Tracker
+            self._tracker = Tracker(self.cfg, self.store)
+        return self._tracker
+
+    def app_delivery_team(self):
+        return self.delivery.team()
 
     LOCK_MAX, LOCK_WINDOW = 10, 900  # 10 wrong passwords per 15 minutes per address
 
@@ -528,6 +539,8 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._send(200, self.app.daily.teams_text(day, (q.get("team") or [""])[0] or None),
                                       "text/plain; charset=utf-8")
                 return self._send(200, self.app.daily.day(day))
+            if u.path == "/api/tracker":
+                return self._send(200, self.app.tracker.status())
             if u.path in ("/api/delivery", "/api/delivery.docx", "/api/delivery.txt"):
                 return self._delivery_get(u.path, q)
             if u.path == "/api/summary":
@@ -633,6 +646,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(202, {"ok": True, "message": "Sinkronisasi dijadwalkan, biasanya selesai dalam 1 menit."})
             if u.path.startswith("/api/daily/"):
                 return self._daily_mutate(method, u.path, body)
+            if u.path.startswith("/api/tracker"):
+                return self._tracker_mutate(method, u.path, body)
             if u.path.startswith("/api/delivery/"):
                 return self._delivery_mutate(method, u.path, body)
             if method == "POST" and u.path == "/api/standards/test":
@@ -676,8 +691,24 @@ class _Handler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/daily/carry":
             n = dl.carry_over(day or "")
             return self._send(200, {**dl.day(day), "carried": n})
+        if method == "POST" and path == "/api/daily/pull":
+            res = dl.pull_tracker(day, bool(body.get("force", True)))
+            self.app.store.add_event("daily", f"Task ditarik dari {res['provider']}",
+                                     f"{res['created']} baru, {res['existing']} sudah ada")
+            return self._send(200, {**dl.day(day), "pulled": res})
         if method == "PUT" and path == "/api/daily/statuses":
             return self._send(200, {"statuses": dl.save_statuses(body.get("statuses") or [])})
+        return self._send(404, {"error": "not found"})
+
+    # ------------------------------------------------------------ tracker
+    def _tracker_mutate(self, method, path, body):
+        tr = self.app.tracker
+        if method == "PUT" and path == "/api/tracker":
+            tr.set_provider(body.get("provider"))
+            self.app.store.add_event("tracker", "Tracker diganti", tr.label())
+            return self._send(200, tr.status())
+        if method == "POST" and path == "/api/tracker/test":
+            return self._send(200, tr.test())
         return self._send(404, {"error": "not found"})
 
     # ------------------------------------------------------------ delivery
