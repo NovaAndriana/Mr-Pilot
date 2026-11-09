@@ -717,8 +717,12 @@ class _Handler(BaseHTTPRequestHandler):
             self.app.store.add_event("delivery", "Anggota tim diperbarui", f"{len(members)} orang")
             return self._send(200, {"members": members})
         if method == "PUT" and path == "/api/delivery/mode":
-            dl.set_mode(str(body.get("mode") or ""), body.get("label_prefix"))
-            return self._send(200, {"mode": dl.mode(), "label_prefix": dl.label_prefix()})
+            if body.get("credit_by"):
+                dl.set_credit_by(str(body["credit_by"]))
+            if body.get("mode"):
+                dl.set_mode(str(body["mode"]), body.get("label_prefix"))
+            return self._send(200, {"mode": dl.mode(), "label_prefix": dl.label_prefix(),
+                                    "credit_by": dl.credit_by()})
         if method == "POST" and path == "/api/delivery/override":
             key = str(body.get("key") or "")
             if not re.fullmatch(r"\d+:\d+", key):

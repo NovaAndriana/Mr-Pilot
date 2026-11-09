@@ -73,6 +73,7 @@ DEFAULTS = {
     "delivery": {
         "enabled": True,
         "group_by": "ai",            # ai | label | milestone | ticket
+        "credit_by": "assignee",     # assignee = kredit ke Assignee MR | author = ke pembuat MR
         "label_prefix": "",          # group_by label: hanya label berawalan ini, mis. "feature::"
         "include_open": True,        # tampilkan juga MR yang masih berjalan
         "weekly_telegram": True,
@@ -337,6 +338,9 @@ def validate(cfg):
     dl["group_by"] = str(dl.get("group_by") or "ai").strip().lower()
     if dl["group_by"] not in ("ai", "label", "milestone", "ticket"):
         raise ConfigError("delivery.group_by harus ai | label | milestone | ticket")
+    dl["credit_by"] = str(dl.get("credit_by") or "assignee").strip().lower()
+    if dl["credit_by"] not in ("assignee", "author"):
+        raise ConfigError("delivery.credit_by harus assignee | author")
     if str(dl.get("weekly_day") or "fri").lower()[:3] not in ("mon", "tue", "wed", "thu", "fri", "sat", "sun"):
         raise ConfigError("delivery.weekly_day harus mon | tue | wed | thu | fri | sat | sun")
     if not isinstance(dl.get("team") or [], list):
